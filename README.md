@@ -1,0 +1,157 @@
+# @debugai/mcp
+
+DebugAI as an MCP server. Your agent hands an error to `debug_error` and gets
+back the root cause plus up to 3 ranked fixes with code patches. Works in
+Claude Desktop, Claude Code, Cursor, Zed, Windsurf, and any other MCP client.
+
+Until now this server only shipped inside the
+[DebugAI VS Code extension](https://marketplace.visualstudio.com/items?itemName=debugai.debugai).
+This package is the same server, standalone. No VS Code required.
+
+## Setup
+
+1. Create a free account at [debugai.io](https://debugai.io) (10 debugs/day, no card).
+2. Copy your API key (`dbg_...`) from [debugai.io/dashboard](https://debugai.io/dashboard).
+3. Add the server to your MCP client (snippets below). Node 18+ required.
+
+### Claude Code
+
+```bash
+claude mcp add debugai --env DEBUGAI_API_KEY=dbg_your_key_here -- npx -y @debugai/mcp
+```
+
+### Claude Desktop
+
+`claude_desktop_config.json` (Settings, Developer, Edit Config):
+
+```json
+{
+  "mcpServers": {
+    "debugai": {
+      "command": "npx",
+      "args": ["-y", "@debugai/mcp"],
+      "env": { "DEBUGAI_API_KEY": "dbg_your_key_here" }
+    }
+  }
+}
+```
+
+### Cursor
+
+`~/.cursor/mcp.json` (or `.cursor/mcp.json` per project):
+
+```json
+{
+  "mcpServers": {
+    "debugai": {
+      "command": "npx",
+      "args": ["-y", "@debugai/mcp"],
+      "env": { "DEBUGAI_API_KEY": "dbg_your_key_here" }
+    }
+  }
+}
+```
+
+### Zed
+
+`settings.json`:
+
+```json
+{
+  "context_servers": {
+    "debugai": {
+      "command": {
+        "path": "npx",
+        "args": ["-y", "@debugai/mcp"],
+        "env": { "DEBUGAI_API_KEY": "dbg_your_key_here" }
+      }
+    }
+  }
+}
+```
+
+### Windsurf
+
+`~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "debugai": {
+      "command": "npx",
+      "args": ["-y", "@debugai/mcp"],
+      "env": { "DEBUGAI_API_KEY": "dbg_your_key_here" }
+    }
+  }
+}
+```
+
+### VS Code
+
+You don't need this package. The
+[DebugAI extension](https://marketplace.visualstudio.com/items?itemName=debugai.debugai)
+registers the MCP server automatically (VS Code 1.101+) and adds one-click
+fix apply, proactive scan, and codebase indexing on top.
+
+## The tool
+
+### `debug_error`
+
+Give it an error, get an analysis.
+
+| Input | Required | Description |
+|-------|----------|-------------|
+| `errorText` | yes | Full error message, exception, or stack trace. |
+| `language` | no | `javascript`, `typescript`, `python`, `go`, `rust`, or `auto` (default). |
+| `codeSnippet` | no | Code around the failing line, if the agent has it. |
+| `filePath` | no | Path to the file that threw. |
+
+Returns the root cause, up to 3 fixes ranked by confidence (with code
+patches), the detected framework, and whether the answer came from cache.
+Read-only: it never touches your files. Applying a fix is your agent's
+(and your) call.
+
+Example, in Claude Code:
+
+> Paste a traceback and ask "why is this failing?". Claude calls
+> `debug_error` and gets back something like:
+>
+> **Root cause:** `db.session` is used after the request context closed.
+> **Fix 1 (94% confidence):** move the query inside the request handler...
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEBUGAI_API_KEY` | (none) | Your API key. Required for real analyses. |
+| `DEBUGAI_API_BASE` | DebugAI production | Override for self-hosted or staging setups. |
+| `DEBUGAI_TIMEOUT_MS` | `150000` | Per-request deadline. Deep analyses can take 30-90s. |
+
+## Limits and honesty
+
+- Free tier: 10 debugs/day. Pro ($12/mo): 1,000/mo soft cap, never hard-blocked at it.
+- When you hit the daily cap the tool says so and stops. It will not silently retry.
+- Simple errors route to a fast model; ugly cross-file ones route to a
+  stronger one on paid tiers. The `Model:` badge in each response tells you
+  which one answered.
+- Analyses run on DebugAI's servers. The error text and any snippet you pass
+  are sent there. Privacy policy: [debugai.io/privacy](https://debugai.io/privacy).
+
+## Troubleshooting
+
+- **"authentication failed"**: key missing or wrong. Check the `env` block in
+  your client config, restart the client. Keys start with `dbg_`.
+- **Nothing happens on `npx @debugai/mcp`**: correct. It's a stdio server that
+  waits for an MCP client to speak first. Run `npx @debugai/mcp --help` to
+  verify the install.
+- **Timeouts**: deep analyses can take up to 90s. If your client has its own
+  tool timeout, raise it above that.
+
+## Development
+
+```bash
+npm install
+npm test        # builds, then runs unit + spawned-process e2e tests
+```
+
+MIT © DebugAI

@@ -1,0 +1,54 @@
+{
+  "name": "@debugai/mcp",
+  "version": "1.0.0",
+  "description": "DebugAI MCP server — hand any error to DebugAI from Claude Desktop, Claude Code, Cursor, Zed, or any MCP client and get root cause + ranked fixes.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "debugai-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "debugging",
+    "ai",
+    "claude",
+    "error-analysis",
+    "stack-trace",
+    "debugai"
+  ],
+  "homepage": "https://debugai.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/1shizaan/debugai-mvp.git",
+    "directory": "packages/mcp"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}
