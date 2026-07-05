@@ -14,6 +14,19 @@ This package is the same server, standalone. No VS Code required.
 2. Copy your API key (`dbg_...`) from [debugai.io/dashboard](https://debugai.io/dashboard).
 3. Add the server to your MCP client (snippets below). Node 18+ required.
 
+### Set the key once for every client (optional)
+
+Instead of repeating the key in each client's `env` block, write it to
+`~/.debugai/config.json`:
+
+```json
+{ "api_key": "dbg_your_key_here" }
+```
+
+Every MCP client launching `npx -y @debugai/mcp` picks it up — you can then
+drop the `env` block from the snippets below entirely. An explicit
+`DEBUGAI_API_KEY` env var still wins over the file.
+
 ### Claude Code
 
 ```bash
@@ -123,9 +136,10 @@ Example, in Claude Code:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEBUGAI_API_KEY` | (none) | Your API key. Required for real analyses. |
-| `DEBUGAI_API_BASE` | DebugAI production | Override for self-hosted or staging setups. |
+| `DEBUGAI_API_KEY` | (none) | Your API key. Falls back to `api_key` in the config file. |
+| `DEBUGAI_API_BASE` | DebugAI production | Override for self-hosted or staging setups. Falls back to `api_base` in the config file. |
 | `DEBUGAI_TIMEOUT_MS` | `150000` | Per-request deadline. Deep analyses can take 30-90s. |
+| `DEBUGAI_CONFIG_PATH` | `~/.debugai/config.json` | Alternate config file location. Rarely needed. |
 
 ## Limits and honesty
 
@@ -140,7 +154,8 @@ Example, in Claude Code:
 ## Troubleshooting
 
 - **"authentication failed"**: key missing or wrong. Check the `env` block in
-  your client config, restart the client. Keys start with `dbg_`.
+  your client config or `~/.debugai/config.json`, restart the client. Keys
+  start with `dbg_`.
 - **Nothing happens on `npx @debugai/mcp`**: correct. It's a stdio server that
   waits for an MCP client to speak first. Run `npx @debugai/mcp --help` to
   verify the install.

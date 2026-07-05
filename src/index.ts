@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createServer } from './server.js';
 import { DEFAULT_TIMEOUT_MS } from './backend.js';
+import { configPath, resolveSettings } from './config.js';
 
 const DEFAULT_API_BASE = 'https://debugai-mvp-production.up.railway.app/api';
 
@@ -30,9 +31,13 @@ Usage:
   npx @debugai/mcp --help
 
 Environment:
-  DEBUGAI_API_KEY      required — your API key (dbg_...) from https://debugai.io/dashboard
+  DEBUGAI_API_KEY      your API key (dbg_...) from https://debugai.io/dashboard
   DEBUGAI_API_BASE     optional — API base URL (default: DebugAI production)
   DEBUGAI_TIMEOUT_MS   optional — per-request deadline in ms (default: ${DEFAULT_TIMEOUT_MS})
+
+Config file (set the key once, every MCP client picks it up):
+  ~/.debugai/config.json    {"api_key": "dbg_..."}
+  Env vars win over the file. api_base is also accepted.
 
 This is a stdio MCP server: it is meant to be launched BY an MCP client
 (Claude Desktop, Claude Code, Cursor, Zed, ...), not run interactively.
@@ -56,16 +61,16 @@ function main(): void {
     return;
   }
 
-  const apiKey  = (process.env.DEBUGAI_API_KEY ?? '').trim();
-  const apiBase = (process.env.DEBUGAI_API_BASE ?? DEFAULT_API_BASE).trim().replace(/\/+$/, '');
+  const { apiKey, apiBase, keySource } = resolveSettings(DEFAULT_API_BASE);
 
   const rawTimeout = Number(process.env.DEBUGAI_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : DEFAULT_TIMEOUT_MS;
 
   if (!apiKey) {
     console.error(
-      '[debugai-mcp] DEBUGAI_API_KEY not set — tools will return auth errors. ' +
-      'Get a key at https://debugai.io/dashboard and add it to the "env" block of your MCP client config.',
+      '[debugai-mcp] no API key found — tools will return auth errors. ' +
+      'Get a key at https://debugai.io/dashboard, then either set DEBUGAI_API_KEY in your ' +
+      `MCP client config or write it once to ${configPath()} as {"api_key": "dbg_..."}.`,
     );
   } else if (!apiKey.startsWith('dbg_')) {
     console.error(
@@ -84,7 +89,9 @@ function main(): void {
 
   const transport = new StdioServerTransport();
   server.connect(transport).then(
-    () => console.error(`[debugai-mcp] v${VERSION} connected on stdio (api: ${apiBase})`),
+    () => console.error(
+      `[debugai-mcp] v${VERSION} connected on stdio (api: ${apiBase}, key: ${keySource})`,
+    ),
     (err) => {
       console.error('[debugai-mcp] fatal:', err);
       process.exit(1);

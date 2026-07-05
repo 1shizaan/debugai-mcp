@@ -3,6 +3,8 @@
 // mock of the DebugAI API. Requires `npm run build` first (wired via pretest).
 import { createServer as createHttpServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -49,7 +51,7 @@ afterAll(() => {
   api.close();
 });
 
-async function spawnServer(apiKey: string): Promise<Client> {
+async function spawnServer(apiKey: string, extraEnv: Record<string, string> = {}): Promise<Client> {
   const client = new Client({ name: 'e2e-client', version: '0.0.1' });
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -58,6 +60,9 @@ async function spawnServer(apiKey: string): Promise<Client> {
       ...process.env,
       DEBUGAI_API_KEY: apiKey,
       DEBUGAI_API_BASE: apiBase,
+      // Isolate from any real ~/.debugai/config.json on the host machine.
+      DEBUGAI_CONFIG_PATH: join(tmpdir(), 'debugai-mcp-e2e-nonexistent', 'config.json'),
+      ...extraEnv,
     },
   });
   await client.connect(transport);
@@ -125,6 +130,27 @@ describe('spawned CLI over stdio', () => {
       expect(textOf(result)).toContain('DEBUGAI_API_KEY');
     } finally {
       await client.close();
+    }
+  });
+
+  it('picks up the API key from a config file when env is unset', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'debugai-mcp-e2e-config-'));
+    const configFile = join(dir, 'config.json');
+    writeFileSync(configFile, JSON.stringify({ api_key: 'dbg_e2e_key' }));
+
+    const client = await spawnServer('', { DEBUGAI_CONFIG_PATH: configFile });
+    try {
+      const result = await client.callTool({
+        name: 'debug_error',
+        arguments: { errorText: 'ReferenceError: y is not defined' },
+      }) as CallToolResult;
+
+      expect(result.isError).toBeFalsy();
+      expect(textOf(result)).toContain('Mock root cause from e2e API.');
+      expect(lastRequest?.headers['x-api-key']).toBe('dbg_e2e_key');
+    } finally {
+      await client.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "@debugai/mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "DebugAI MCP server — hand any error to DebugAI from Claude Desktop, Claude Code, Cursor, Zed, or any MCP client and get root cause + ranked fixes.",
   "license": "MIT",
   "type": "module",
