@@ -7,6 +7,15 @@ export interface DebugRequest {
   framework_hint?: string;
 }
 
+// v2 contract (schema_version 2.0): exact search/replace payload derived
+// mechanically by the engine from the submitted snippet — see
+// docs/plan-v2-contract-phase1.md §0. old_string is LF-normalized.
+export interface DebugEdit {
+  file: string;
+  old_string: string;
+  new_string: string;
+}
+
 export interface DebugFix {
   rank: number;
   title: string;
@@ -14,6 +23,16 @@ export interface DebugFix {
   confidence: number;
   code?: string;
   line_hint?: string;
+  // Self-verification (T1.3): true = mechanically checked and passed,
+  // false = checked and FAILED (confidence already capped by the engine),
+  // null/absent = NOT CHECKED — confidence is the model's own estimate.
+  // Never collapse null into false when rendering.
+  verified?: boolean | null;
+  verification_reason?: string;
+  // v2 contract fields — present only when honestly derivable.
+  edits?: DebugEdit[];
+  unified_diff?: string;
+  verify_with?: string;
 }
 
 export interface DebugResponse {
@@ -28,6 +47,28 @@ export interface DebugResponse {
   pattern_matched?: string;
   remaining_today?: number;
   mock?: boolean;
+  schema_version?: string;
+  // Attached by the API gateway — the handle report_outcome links back to.
+  debug_log_id?: string | null;
+  error_signature?: string;
+  session_id?: string;
+  memory_hit?: boolean;
+  memory_fix_confirmed?: boolean;
+}
+
+// report_outcome → POST /user/debug-feedback (the unified outcome pipeline —
+// same route, table, and Team Error Memory promotion path as human feedback
+// from the extension; docs/plan-v2-contract-phase1.md §2).
+export interface OutcomeRequest {
+  debug_log_id: string;
+  result: 'worked' | 'failed';
+  fix_rank?: number;
+  new_error?: string;
+  source: 'agent';
+}
+
+export interface OutcomeResponse {
+  success: boolean;
 }
 
 export interface BackendConfig {
@@ -44,29 +85,33 @@ export interface BackendError extends Error {
 }
 
 export const DEFAULT_TIMEOUT_MS = 150_000;
+// Feedback writes are a fast DB insert, not an LLM call — fail fast so a
+// stuck outcome report never holds an agent hostage for minutes.
+export const OUTCOME_TIMEOUT_MS = 15_000;
 
 function makeBackendError(message: string, status: number, retryAfterSeconds = 0): BackendError {
   return Object.assign(new Error(message), { status, retryAfterSeconds }) as BackendError;
 }
 
-export async function callDebugBackend(
-  req: DebugRequest,
+async function postJson<T>(
+  path: string,
+  payload: unknown,
   config: BackendConfig,
-): Promise<DebugResponse> {
-  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  timeoutMs: number,
+): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   let res: Response;
   try {
-    res = await fetch(`${config.apiBase}/debug`, {
+    res = await fetch(`${config.apiBase}${path}`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         'x-api-key': config.apiKey,
         'user-agent': `debugai-mcp/${config.version}`,
       },
-      body: JSON.stringify(req),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
   } catch (err) {
@@ -91,5 +136,19 @@ export async function callDebugBackend(
     throw makeBackendError(text || res.statusText, res.status, retryAfter);
   }
 
-  return res.json() as Promise<DebugResponse>;
+  return res.json() as Promise<T>;
+}
+
+export async function callDebugBackend(
+  req: DebugRequest,
+  config: BackendConfig,
+): Promise<DebugResponse> {
+  return postJson<DebugResponse>('/debug', req, config, config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+}
+
+export async function callOutcomeBackend(
+  req: OutcomeRequest,
+  config: BackendConfig,
+): Promise<OutcomeResponse> {
+  return postJson<OutcomeResponse>('/user/debug-feedback', req, config, OUTCOME_TIMEOUT_MS);
 }

@@ -106,7 +106,7 @@ You don't need this package. The
 registers the MCP server automatically (VS Code 1.101+) and adds one-click
 fix apply, proactive scan, and codebase indexing on top.
 
-## The tool
+## The tools
 
 ### `debug_error`
 
@@ -119,10 +119,35 @@ Give it an error, get an analysis.
 | `codeSnippet` | no | Code around the failing line, if the agent has it. |
 | `filePath` | no | Path to the file that threw. |
 
-Returns the root cause, up to 3 fixes ranked by confidence (with code
-patches), the detected framework, and whether the answer came from cache.
-Read-only: it never touches your files. Applying a fix is your agent's
-(and your) call.
+Returns the root cause, up to 3 fixes ranked by confidence, the detected
+framework, and whether the answer came from cache. Since 2.0 each fix also
+carries, where derivable: `edits` (exact old/new strings your agent's edit
+tool can apply directly), `unified_diff`, and `verify_with` (a syntax-level
+check command to run after applying). Read-only: it never touches your
+files. Applying a fix is your agent's (and your) call.
+
+Every fix is labeled with its verification state, and there are three of
+them, not two: **verified** (a mechanical check passed — currently
+parse/import classes), **failed check** (confidence capped hard), or **not
+verified** (the confidence number is the model's own estimate — nothing
+checked it). We label the third case instead of hiding it.
+
+### `report_outcome`
+
+Tell DebugAI whether an applied fix actually worked.
+
+| Input | Required | Description |
+|-------|----------|-------------|
+| `debugLogId` | yes | The `debug_log_id` from the `debug_error` response. |
+| `result` | yes | `worked` or `failed`. |
+| `fixRank` | no | Which ranked fix was applied (1-3). |
+| `newError` | no | If it failed: the error you saw after applying. |
+
+Confirmed rank-1 fixes are remembered per project (the next hit on the same
+error starts from the confirmed fix); failed-fix follow-ups are the
+feedback that improves future answers. Agents are asked to call this once
+per applied fix — same pipeline human feedback flows through in the VS Code
+extension.
 
 Example, in Claude Code:
 

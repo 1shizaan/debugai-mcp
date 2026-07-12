@@ -30,11 +30,13 @@ describe('debug_error tool over MCP', () => {
     const { client } = await connectedClient();
     const { tools } = await client.listTools();
 
-    expect(tools).toHaveLength(1);
-    const tool = tools[0];
-    expect(tool.name).toBe('debug_error');
+    expect(tools.map(t => t.name).sort()).toEqual(['debug_error', 'report_outcome']);
+    const tool = tools.find(t => t.name === 'debug_error')!;
     expect(tool.annotations?.readOnlyHint).toBe(true);
     expect(tool.inputSchema.required).toContain('errorText');
+    // report_outcome writes telemetry — it must NOT carry readOnlyHint
+    const outcome = tools.find(t => t.name === 'report_outcome')!;
+    expect(outcome.annotations?.readOnlyHint).toBeUndefined();
   });
 
   it('formats a successful analysis into root cause, ranked fixes, and badges', async () => {
@@ -103,6 +105,60 @@ describe('debug_error tool over MCP', () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('daily quota reached');
+  });
+
+  it('renders tri-state verification labels and v2 edit fields (schema 2.0)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      schema_version: '2.0',
+      debug_log_id: 'log-123',
+      error_signature: 'sig-abc',
+      root_cause: 'Renamed export.',
+      fixes: [
+        {
+          rank: 1, title: 'Fix the import', description: 'Use the new name.', confidence: 90,
+          code: "from billing.pricing import apply_discount", line_hint: 'line 1',
+          verified: true, verification_reason: 'import(s) match a file in the retrieved context',
+          edits: [{ file: 'billing/checkout.py', old_string: 'from billing.pricing import calculate_discount', new_string: 'from billing.pricing import apply_discount' }],
+          unified_diff: '--- a/billing/checkout.py\n+++ b/billing/checkout.py\n@@ -1 +1 @@\n-from billing.pricing import calculate_discount\n+from billing.pricing import apply_discount\n',
+          verify_with: 'python -m py_compile billing/checkout.py',
+        },
+        {
+          rank: 2, title: 'Guard the call', description: 'Null-check first.', confidence: 95,
+          code: 'if x: x()', line_hint: 'line 3',
+          verified: null, verification_reason: "error_class='TypeError' not covered by v1 (parse/import only)",
+        },
+        {
+          rank: 3, title: 'Broken import', description: 'Wrong name.', confidence: 15,
+          code: 'from billing.pricing import nonexistent', line_hint: 'line 1',
+          verified: false, verification_reason: 'import(s) not found in retrieved context: billing.pricing.nonexistent',
+        },
+      ],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'ImportError: cannot import name', language: 'python' },
+    }) as CallToolResult;
+
+    const text = textOf(result);
+    // Three distinct states, never two (plan §1)
+    expect(text).toContain('✓ Verified — import(s) match a file in the retrieved context');
+    expect(text).toContain('Not verified — confidence is the model\'s own estimate');
+    expect(text).toContain('✗ Failed mechanical check (confidence capped)');
+    // v2 payloads surface in markdown + structuredContent
+    expect(text).toContain('```diff');
+    expect(text).toContain('Syntax-level check after applying');
+    expect(text).toContain('report_outcome with debugLogId "log-123"');
+    expect(result.structuredContent).toMatchObject({
+      schema_version: '2.0',
+      debug_log_id: 'log-123',
+      error_signature: 'sig-abc',
+    });
+    const fixes = (result.structuredContent as any).fixes;
+    expect(fixes[0].edits[0].old_string).toContain('calculate_discount');
+    expect(fixes[1].verified).toBeNull();
+    expect(fixes[2].verified).toBe(false);
   });
 
   it('rejects a missing errorText at the schema layer without calling the backend', async () => {

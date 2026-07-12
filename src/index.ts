@@ -22,8 +22,11 @@ const VERSION = packageVersion();
 
 const HELP = `debugai-mcp v${VERSION} — DebugAI MCP server (stdio)
 
-Exposes the debug_error tool to any MCP client: hand it an error or stack
-trace, get root cause + ranked fixes from DebugAI.
+Exposes two tools to any MCP client:
+  debug_error     hand it an error or stack trace, get root cause + ranked
+                  fixes with machine-applicable edits (v2 contract)
+  report_outcome  tell DebugAI whether an applied fix worked — failed-fix
+                  follow-ups improve future answers for your codebase
 
 Usage:
   npx @debugai/mcp                # start the server (stdio transport)

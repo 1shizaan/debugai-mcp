@@ -79,7 +79,7 @@ describe('spawned CLI over stdio', () => {
     const client = await spawnServer('dbg_e2e_key');
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual(['debug_error']);
+      expect(tools.map((t) => t.name).sort()).toEqual(['debug_error', 'report_outcome']);
 
       const result = await client.callTool({
         name: 'debug_error',

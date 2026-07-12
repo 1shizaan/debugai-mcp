@@ -4,9 +4,23 @@ import type { BackendConfig, DebugFix } from '../backend.js';
 import { callDebugBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
 
+// Tri-state verification labeling (docs/plan-v2-contract-phase1.md §1).
+// The null case is rendered ON PURPOSE: a confidence number nothing checked
+// must never look the same as one that was mechanically verified.
+export function formatVerification(fix: DebugFix): string {
+  if (fix.verified === true) {
+    return `✓ Verified — ${fix.verification_reason ?? 'mechanical check passed'}`;
+  }
+  if (fix.verified === false) {
+    return `✗ Failed mechanical check (confidence capped) — ${fix.verification_reason ?? 'check failed'}`;
+  }
+  return '· Not verified — confidence is the model\'s own estimate; nothing checked this fix.';
+}
+
 export function formatFix(fix: DebugFix, index: number): string {
   const lines: string[] = [
     `\n**Fix ${index} (${fix.confidence}% confidence)** — ${fix.title}`,
+    formatVerification(fix),
     fix.description,
   ];
   if (fix.code) {
@@ -14,6 +28,17 @@ export function formatFix(fix: DebugFix, index: number): string {
   }
   if (fix.line_hint) {
     lines.push(`_Location: ${fix.line_hint}_`);
+  }
+  if (fix.edits?.length) {
+    lines.push(
+      '_Machine-applicable edit available: `edits` on this fix in structuredContent carries the exact old/new strings (apply with your Edit/replace tool)._',
+    );
+  }
+  if (fix.unified_diff) {
+    lines.push('```diff', fix.unified_diff.trimEnd(), '```');
+  }
+  if (fix.verify_with) {
+    lines.push(`_Syntax-level check after applying: \`${fix.verify_with}\`_`);
   }
   return lines.join('\n');
 }
@@ -29,7 +54,8 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         '"debug this stack trace", "fix this exception", "analyze this traceback", or shows a ' +
         'Traceback / TypeError / ReferenceError / AttributeError. ' +
         'Works for Python, JavaScript, TypeScript, Go, Rust. ' +
-        'Returns root cause explanation plus up to 3 ranked fixes with code patches.',
+        'Returns root cause explanation plus up to 3 ranked fixes with machine-applicable code edits. ' +
+        'After applying a fix, report whether it worked via the report_outcome tool.',
       inputSchema: {
         errorText: z
           .string()
@@ -86,17 +112,27 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           sections.push(`\n---\n_${badges.join(' · ')}_`);
         }
 
+        if (result.debug_log_id) {
+          sections.push(
+            `\nAfter applying a fix, call report_outcome with debugLogId "${result.debug_log_id}", ` +
+            'the fixRank you applied, and result "worked" or "failed" (include newError text if it failed).',
+          );
+        }
+
         const text = sections.join('\n');
 
         return {
           content: [{ type: 'text', text }],
           structuredContent: {
+            schema_version:      result.schema_version ?? '1.0',
             root_cause:          result.root_cause,
             fixes:               result.fixes,
             framework_detected:  result.framework_detected,
             model_used:          result.model_used,
             cached:              result.cached ?? false,
             has_project_context: result.has_project_context ?? false,
+            debug_log_id:        result.debug_log_id ?? null,
+            error_signature:     result.error_signature ?? null,
           },
         };
       } catch (err) {
