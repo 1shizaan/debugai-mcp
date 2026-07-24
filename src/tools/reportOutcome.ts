@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BackendConfig } from '../backend.js';
 import { callOutcomeBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
+import { resolveAuth } from './authGate.js';
 
 export function registerReportOutcome(server: McpServer, config: BackendConfig): void {
   server.registerTool(
@@ -43,6 +44,9 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
       },
     },
     async ({ debugLogId, result, fixRank, newError }) => {
+      const gate = await resolveAuth(config);
+      if (!gate.ok) return gate.result;
+
       try {
         await callOutcomeBackend(
           {
@@ -52,7 +56,7 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
             new_error: newError,
             source: 'agent',
           },
-          config,
+          gate.config,
         );
         const ack =
           result === 'worked'

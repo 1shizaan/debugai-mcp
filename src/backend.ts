@@ -1,3 +1,5 @@
+import type { AuthProvider } from './auth.js';
+
 export interface DebugRequest {
   error_message: string;
   code_snippet?: string;
@@ -72,11 +74,19 @@ export interface OutcomeResponse {
 }
 
 export interface BackendConfig {
+  /** Key resolved at process start. Present for direct/test use; live calls prefer `auth`. */
   apiKey: string;
   apiBase: string;
   version: string;
   /** Whole-request deadline in ms. Claude analysis runs 30-90s; nginx cuts at 120s. */
   timeoutMs?: number;
+  /**
+   * Live auth. When set, tools resolve the key through it on every call (so a
+   * key added while the client is running works without a restart) and can
+   * start a browser sign-in mid-conversation. Absent in unit tests, which pass
+   * a fixed apiKey.
+   */
+  auth?: AuthProvider;
 }
 
 export interface BackendError extends Error {

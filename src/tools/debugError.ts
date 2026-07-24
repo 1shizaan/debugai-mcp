@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BackendConfig, DebugFix } from '../backend.js';
 import { callDebugBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
+import { resolveAuth } from './authGate.js';
 
 // Tri-state verification labeling (docs/plan-v2-contract-phase1.md §1).
 // The null case is rendered ON PURPOSE: a confidence number nothing checked
@@ -80,6 +81,9 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       },
     },
     async ({ errorText, language, codeSnippet, filePath }) => {
+      const gate = await resolveAuth(config);
+      if (!gate.ok) return gate.result;
+
       try {
         const result = await callDebugBackend(
           {
@@ -91,7 +95,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             // framework ('fastapi'), and sending it bypasses the engine's
             // framework detection — FastAPI/React errors lose their expert hints.
           },
-          config,
+          gate.config,
         );
 
         const sections: string[] = ['## Root Cause', result.root_cause ?? '(no root cause returned)'];

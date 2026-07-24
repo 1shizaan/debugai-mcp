@@ -25,6 +25,21 @@ beforeAll(async () => {
     req.on('end', () => {
       lastRequest = { headers: req.headers, body: JSON.parse(raw || '{}') };
 
+      // Device link is deliberately reachable WITHOUT a key — it is how a
+      // client with no key gets one (see the skip list in apps/api/src/index.ts).
+      if (req.url?.endsWith('/device-link/start')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          device_code: 'e2e-device-code',
+          user_code: 'BCDF-2345',
+          verification_uri: 'https://debugai.io/link',
+          verification_uri_complete: 'https://debugai.io/link?code=BCDF-2345',
+          expires_in: 600,
+          interval: 5,
+        }));
+        return;
+      }
+
       if (req.headers['x-api-key'] !== 'dbg_e2e_key') {
         res.writeHead(401, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'invalid api key' }));
@@ -117,7 +132,10 @@ describe('spawned CLI over stdio', () => {
     }
   });
 
-  it('starts without an API key and returns an actionable auth error on call', async () => {
+  it('with no API key, turns the first call into an in-conversation sign-in', async () => {
+    // The old behavior — "go read your dashboard and edit a config file" — is
+    // exactly the dead end that produced installs with no signups. A call
+    // without a key must now come back with a code the agent can read out.
     const client = await spawnServer('');
     try {
       const result = await client.callTool({
@@ -126,8 +144,31 @@ describe('spawned CLI over stdio', () => {
       }) as CallToolResult;
 
       expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain('debugai.io/dashboard');
-      expect(textOf(result)).toContain('DEBUGAI_API_KEY');
+      const text = textOf(result);
+      expect(text).toContain('BCDF-2345');
+      expect(text).toContain('https://debugai.io/link?code=BCDF-2345');
+      expect(text).toMatch(/call this tool again/i);
+      expect(text).toMatch(/does NOT need restarting/i);
+
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured.error_type).toBe('not_linked');
+      expect(structured.user_code).toBe('BCDF-2345');
+      expect(structured.retryable).toBe(true); // the same call works once approved
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('report_outcome is gated by the same sign-in, not a raw auth failure', async () => {
+    const client = await spawnServer('');
+    try {
+      const result = await client.callTool({
+        name: 'report_outcome',
+        arguments: { debugLogId: 'x', result: 'worked' },
+      }) as CallToolResult;
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain('BCDF-2345');
     } finally {
       await client.close();
     }

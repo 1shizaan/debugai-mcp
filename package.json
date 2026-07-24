@@ -1,7 +1,7 @@
 {
   "name": "@debugai/mcp",
-  "version": "2.0.0",
-  "description": "DebugAI MCP server — hand any error to DebugAI from Claude Desktop, Claude Code, Cursor, Zed, or any MCP client and get root cause + ranked fixes.",
+  "version": "2.1.0",
+  "description": "DebugAI MCP server. One command sets it up in Claude Desktop, Claude Code, Cursor, Zed, Windsurf, Cline or any MCP client: browser sign-in, no key pasting, no config editing.",
   "license": "MIT",
   "type": "module",
   "bin": {
