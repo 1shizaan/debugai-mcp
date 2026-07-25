@@ -17,6 +17,9 @@ checks that all of it actually works.
 
 Restart the clients it names and your agent has the tools.
 
+Prefer to read first? [debugai.io/start?src=npm](https://debugai.io/start?src=npm) walks
+the same thing per client.
+
 ### What that command does to your machine
 
 Worth knowing before you run something that edits your editor config:
@@ -199,7 +202,7 @@ still works and still wins over the stored one.
   stronger one on paid tiers. The `Model:` badge in each response tells you
   which one answered.
 - Analyses run on DebugAI's servers. The error text and any snippet you pass
-  are sent there. Privacy policy: [debugai.io/privacy](https://debugai.io/privacy).
+  are sent there. Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
 
 ## Troubleshooting
 
