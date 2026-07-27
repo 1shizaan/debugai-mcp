@@ -196,4 +196,12 @@ npm install
 npm test        # builds, then runs unit + spawned-process e2e tests
 ```
 
+## Source
+
+[github.com/1shizaan/debugai-mcp](https://github.com/1shizaan/debugai-mcp) is the source for this package, mirrored from the directory it is developed in. It carries the full commit history for these files, so `git log` and `git blame` work normally.
+
+The client is MIT and complete: the stdio server, the device-link sign-in, the config writer, and the tests are all here. The analysis itself runs on DebugAI's servers and is not part of this package.
+
+Issues and pull requests are welcome on that repository.
+
 MIT © DebugAI

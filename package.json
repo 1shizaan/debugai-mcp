@@ -36,8 +36,10 @@
   "homepage": "https://debugai.io",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/1shizaan/debugai-mvp.git",
-    "directory": "packages/mcp"
+    "url": "git+https://github.com/1shizaan/debugai-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/1shizaan/debugai-mcp/issues"
   },
   "publishConfig": {
     "access": "public"
