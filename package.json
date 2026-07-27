@@ -1,6 +1,7 @@
 {
   "name": "@debugai/mcp",
-  "version": "2.1.0",
+  "version": "2.1.1",
+  "mcpName": "io.github.1shizaan/debugai-mcp",
   "description": "DebugAI MCP server. One command sets it up in Claude Desktop, Claude Code, Cursor, Zed, Windsurf, Cline or any MCP client: browser sign-in, no key pasting, no config editing.",
   "license": "MIT",
   "type": "module",

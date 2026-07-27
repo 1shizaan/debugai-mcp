@@ -185,6 +185,8 @@ Run `npx -y @debugai/mcp doctor` first. It checks your Node version, whether a k
 
 ## Changelog
 
+**2.1.1**: metadata only. Adds `mcpName` for official MCP registry ownership verification, fixes the npm package page's repository link.
+
 **2.1.0**: one-command setup. Browser sign-in over a device link (no key pasting), automatic client config writing with backups, `doctor` for diagnosing a broken setup, and in-conversation sign-in when an agent calls a tool before you have an account.
 
 **2.0.0**: `report_outcome` tool, ready-to-apply `edits` per fix, and the three-state verification label.
