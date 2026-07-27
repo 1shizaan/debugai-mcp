@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.1shizaan/debugai-mcp",
+  "description": "DebugAI MCP server. One command sets it up in Claude Desktop, Claude Code, Cursor, Zed, Windsurf, Cline or any MCP client: browser sign-in, no key pasting, no config editing.",
+  "repository": {
+    "url": "https://github.com/1shizaan/debugai-mcp",
+    "source": "github"
+  },
+  "version": "2.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@debugai/mcp",
+      "version": "2.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Your DebugAI API key (dbg_...). Optional: run `npx -y @debugai/mcp setup` for browser sign-in instead, no key needed.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "DEBUGAI_API_KEY"
+        }
+      ]
+    }
+  ]
+}
