@@ -175,3 +175,76 @@ describe('debug_error tool over MCP', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('project scope and error memory', () => {
+  // Before this, nothing in the package ever set project_id. The engine gates
+  // Team Error Memory on it (fetch_error_memory returns None without one) and
+  // the confirmed-fix promotion in feedback.ts requires ds.project_id IS NOT
+  // NULL, so every agent request silently got no memory while the server
+  // instructions advertised it.
+  it('sends a project_id so the request is memory-scoped at all', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      root_cause: 'x', fixes: [],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    await client.callTool({ name: 'debug_error', arguments: { errorText: 'boom' } });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.project_id).toEqual(expect.any(String));
+    // The gateway rejects anything outside this shape before it reaches the engine.
+    expect(body.project_id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+  });
+
+  it('tells the agent when this project has hit the error before', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      root_cause: 'x',
+      fixes: [{ rank: 1, title: 'f', description: 'd', confidence: 90 }],
+      memory_hit: true,
+      memory_times_seen: 3,
+      memory_fix_confirmed: true,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error', arguments: { errorText: 'boom' },
+    }) as CallToolResult;
+
+    const text = textOf(result);
+    expect(text).toContain('Seen before');
+    expect(text).toContain('3x before in this project');
+    expect(text).toContain('confirmed');
+    expect(result.structuredContent).toMatchObject({
+      memory_hit: true, memory_times_seen: 3, memory_fix_confirmed: true,
+    });
+  });
+
+  it('distinguishes "seen before" from "seen and fixed"', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      root_cause: 'x', fixes: [],
+      memory_hit: true, memory_times_seen: 2, memory_fix_confirmed: false,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error', arguments: { errorText: 'boom' },
+    }) as CallToolResult;
+
+    expect(textOf(result)).toContain('No fix has been confirmed');
+  });
+
+  it('says nothing about memory on a first occurrence', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      root_cause: 'x', fixes: [], memory_hit: false,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error', arguments: { errorText: 'boom' },
+    }) as CallToolResult;
+
+    expect(textOf(result)).not.toContain('Seen before');
+    expect(result.structuredContent).toMatchObject({ memory_hit: false });
+  });
+});

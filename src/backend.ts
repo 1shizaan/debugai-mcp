@@ -55,6 +55,7 @@ export interface DebugResponse {
   error_signature?: string;
   session_id?: string;
   memory_hit?: boolean;
+  memory_times_seen?: number;
   memory_fix_confirmed?: boolean;
 }
 
