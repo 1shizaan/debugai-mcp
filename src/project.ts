@@ -78,6 +78,19 @@ export function getProjectId(): string | null {
   return cached;
 }
 
+/**
+ * The directory local source resolution is allowed to read inside.
+ *
+ * Same value the project id is derived from — git toplevel, falling back to
+ * cwd — so "the project we remember errors for" and "the project we may read
+ * files from" can never be two different directories. sourceContext.ts treats
+ * this as a hard boundary: a path that resolves outside it is not read, which
+ * is what keeps a crafted stack trace from turning into an arbitrary file read.
+ */
+export function getProjectRoot(cwd: string = process.cwd()): string {
+  return gitToplevel(cwd) ?? cwd;
+}
+
 /** Test seam. */
 export function __resetProjectIdCache(): void {
   cached = undefined;

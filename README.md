@@ -75,12 +75,28 @@ Give it an error, get an analysis.
 |-------|----------|-------------|
 | `errorText` | yes | Full error message, exception, or stack trace. |
 | `language` | no | `javascript`, `typescript`, `python`, `go`, `rust`, or `auto` (default). |
-| `codeSnippet` | no | Code around the failing line, if the agent has it. |
+| `codeSnippet` | no | Usually unnecessary — see below. Overrides the local read when given. |
 | `filePath` | no | Path to the file that threw. |
 
-Returns the root cause, up to 3 fixes ranked by confidence, the detected framework, and whether the answer came from cache. Since 2.0 each fix also carries, where derivable: `edits` (exact old/new strings your agent's edit tool can apply directly), `unified_diff`, and `verify_with` (a syntax-level check command to run after applying). Read-only: it never touches your files. Applying a fix is your agent's call, and yours.
+Returns the root cause, up to 3 fixes ranked by confidence, the detected framework, and whether the answer came from cache. Since 2.0 each fix also carries, where derivable: `edits` (exact old/new strings your agent's edit tool can apply directly), `unified_diff`, and `verify_with` (a syntax-level check command to run after applying). It never writes to your files. Applying a fix is your agent's call, and yours.
 
 Every fix is labeled with its verification state, and there are three of them, not two: **verified** (a mechanical check passed, currently parse and import classes), **failed check** (confidence capped hard), or **not verified** (the confidence number is the model's own estimate, nothing checked it). We label the third case instead of hiding it.
+
+#### It reads the source the trace names (2.2)
+
+Paste a raw traceback and nothing else. This server runs on your machine, so it resolves the files in the stack trace and sends the relevant code along. Before 2.2 it could not, and an error pasted without code came back as *"Insufficient context for specific fix"* at 20% confidence — the common case, not the edge one.
+
+The response names every file it read (`Read locally: src/api.ts, src/db.ts`, and `local_files_read` in the structured payload), so a wrong guess is visible rather than silent.
+
+Exactly what it will and will not read:
+
+- **Inside your project only.** The boundary is your git repo root, or the working directory when that is not a repo. It is checked *after* symlinks resolve, so a path in an error message cannot walk out of the project — `../../.ssh/id_rsa` and a symlink pointing outside both fail the same check.
+- **Source files only**, by extension allowlist (`.ts .tsx .js .jsx .mjs .cjs .py .go .rs .rb .java .kt .php .cs .swift .vue .svelte`). `.env`, `.pem`, key files, dumps and images are not on it, so they are never candidates.
+- **Bounded**: at most 3 files, 256 KB each, and a large file is sent as a ±40-line window around the failing line rather than whole. Windowed blocks say so.
+- **Vendored code is skipped** — `node_modules`, `site-packages`, `dist`, `.venv` and friends. Your code is what needs explaining.
+- **Your snippet always wins.** Pass `codeSnippet` and nothing is read from disk.
+
+Whatever it reads is sent to DebugAI's API for analysis, same as the error text. If that is not acceptable for a given repo, pass `codeSnippet` explicitly and the local read never happens.
 
 ### `report_outcome`
 
@@ -172,7 +188,8 @@ Then run `npx -y @debugai/mcp login` once to store your key. If you would rather
 - Free tier: 10 debugs/day. Pro ($12/mo): 1,000/mo soft cap, never hard-blocked at it.
 - When you hit the daily cap the tool says so and stops. It will not silently retry.
 - Simple errors route to a fast model. Ugly cross-file ones route to a stronger one on paid tiers. The `Model:` badge in each response tells you which one answered.
-- Analyses run on DebugAI's servers. The error text and any snippet you pass are sent there, and Claude (Anthropic) does the analysis. Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
+- Analyses run on DebugAI's servers. The error text, any snippet you pass, and — since 2.2 — the project source files the stack trace names are sent there, and Claude (Anthropic) does the analysis. The response lists every file that was read. Scope and limits are spelled out under [`debug_error`](#it-reads-the-source-the-trace-names-22). Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
+- Errors are remembered per project so a repeat hit starts from a fix that was already confirmed. The project identity is a hash of your repo root path; the path itself is never sent.
 
 ## Troubleshooting
 
@@ -190,6 +207,11 @@ error parsing, retrieval and root-cause quality reach you without upgrading this
 package. Recent server-side work: pytest, unittest, jest, vitest and mocha output
 now yields real file paths, so a failing test gets cross-file context instead of
 none. Client releases are only for things that change on your machine.
+
+**2.2.0**: two things that were advertised but not delivered.
+
+- **Local source resolution.** The server now reads the files a stack trace names and sends them with the request. Before this, an agent that pasted a traceback got "Insufficient context for specific fix" at 20% confidence, because the only other source of code was an index that nothing outside the VS Code extension populates. Bounded to your repo root, source extensions, 3 files. The response names what it read.
+- **Project-scoped error memory.** Nothing in this package ever sent a `project_id`, and the engine gates recurrence counts and confirmed fixes on it — so every agent request got no recall and recorded none, while the server instructions told agents it did. Now derived from your git repo root, matching the VS Code extension's id for the same checkout, so both surfaces share one memory. `debug_error` surfaces "seen 3x before, fix confirmed" when it applies.
 
 **2.1.1**: metadata only. Adds `mcpName` for official MCP registry ownership verification, fixes the npm package page's repository link.
 

@@ -248,3 +248,89 @@ describe('project scope and error memory', () => {
     expect(result.structuredContent).toMatchObject({ memory_hit: false });
   });
 });
+
+// ── The seam between sourceContext and the wire ──────────────────────────────
+//
+// sourceContext.test.ts proves the module reads the right file and refuses the
+// wrong ones. Nothing there proves the tool CALLS it, or that what it read ends
+// up in code_snippet. A tool that resolved perfectly and then sent nothing would
+// pass every test in that file while shipping the exact bug this release exists
+// to fix.
+//
+// These run against real files in this repo (cwd is packages/mcp, git toplevel
+// is the repo root) rather than a temp fixture, because the thing under test is
+// the default root resolution too.
+
+describe('debug_error sends local source when the agent gave none', () => {
+  function okResponse() {
+    return vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      root_cause: 'x', fixes: [],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+  }
+
+  it('reads the file the stack trace names and sends it as code_snippet', async () => {
+    const fetchMock = okResponse();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'TypeError: boom\n    at f (packages/mcp/src/constants.ts:1:1)' },
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    // The real contents of that file, not a placeholder or a path echo.
+    expect(body.code_snippet).toContain('DEFAULT_API_BASE');
+    expect(body.file_path).toContain('constants.ts');
+  });
+
+  it('names what it read, so a wrong guess is visible rather than silent', async () => {
+    vi.stubGlobal('fetch', okResponse());
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'at f (packages/mcp/src/constants.ts:1:1)' },
+    }) as CallToolResult;
+
+    expect(textOf(result)).toContain('Read locally:');
+    expect(result.structuredContent).toMatchObject({
+      local_files_read: [expect.stringContaining('constants.ts')],
+    });
+  });
+
+  it('never overrides a snippet the agent supplied itself', async () => {
+    // The agent knows what it was looking at. Reading over the top of that
+    // would replace a deliberate choice with a guess from a regex.
+    const fetchMock = okResponse();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error',
+      arguments: {
+        errorText: 'at f (packages/mcp/src/constants.ts:1:1)',
+        codeSnippet: 'const mine = 1',
+      },
+    }) as CallToolResult;
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.code_snippet).toBe('const mine = 1');
+    expect(textOf(result)).not.toContain('Read locally:');
+    expect(result.structuredContent).toMatchObject({ local_files_read: [] });
+  });
+
+  it('sends no snippet at all when nothing resolves, rather than inventing one', async () => {
+    const fetchMock = okResponse();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'ECONNREFUSED 127.0.0.1:5432' },
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.code_snippet).toBeUndefined();
+  });
+});

@@ -51,7 +51,9 @@ Commands:
 
 Tools exposed to your agent:
   debug_error     hand it an error or stack trace, get root cause + ranked
-                  fixes with machine-applicable edits (v2 contract)
+                  fixes with machine-applicable edits (v2 contract). Reads the
+                  source files the trace names, from inside this project only —
+                  no need to locate and paste code first.
   report_outcome  tell DebugAI whether an applied fix worked — failed-fix
                   follow-ups improve future answers for your codebase
 

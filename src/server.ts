@@ -20,6 +20,13 @@ you cannot derive from the code in front of you:
     FAILED, or not checked at all (never treat "not checked" as verified)
   - machine-applicable edits (exact old/new strings) you can apply directly
 
+Pass the raw error or traceback. You do not need to find and paste the source
+first: this server runs on the same machine as the code, so it resolves the
+files the trace names and sends them along. It reads source files inside the
+current project only, and the response says which ones. Pass codeSnippet
+yourself only when you already know the relevant code is somewhere the trace
+does not name.
+
 After you apply or abandon a fix, call report_outcome with the debug_log_id.
 That is what turns a one-off answer into memory for the next person who hits
 the same error. Skipping it costs the user the feature they are paying for.

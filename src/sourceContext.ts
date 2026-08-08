@@ -1,0 +1,296 @@
+/**
+ * Local source resolution — read the files a stack trace names.
+ *
+ * ## Why this is here and not in the engine
+ *
+ * The engine cannot read your disk. It resolves a trace to `bad.js`, asks
+ * pgvector for that file, and gets nothing back unless the project was indexed
+ * first — and indexing only ever happened from the VS Code extension. So an
+ * agent on the MCP path hit this, every time, on every project:
+ *
+ *     Fix 1 — Insufficient context for specific fix          20% confidence
+ *
+ * and the advice attached to it (services/context_advice.py) names
+ * "DebugAI: Index Entire Workspace", a VS Code palette command. A Claude Code
+ * or Cursor agent has no palette and no such command. That is the same defect
+ * we fixed in the extension on 2026-08-08 — advice naming a step the reader
+ * cannot take — aimed at a different audience.
+ *
+ * Rewording it would be the small fix. This is the real one: the MCP server is
+ * a local process. It has the filesystem the engine lacks, so it can send the
+ * actual source and skip the whole missing-context branch rather than write
+ * better copy about it.
+ *
+ * ## What it does
+ *
+ * Reads the error text, ranks the frames it names, resolves them against the
+ * project root, and returns a labelled snippet windowed around the failing
+ * lines. The agent's own `codeSnippet` always wins — this only fills a gap.
+ *
+ * ## What it refuses to do
+ *
+ * This module turns text the model produced into filesystem reads, so its
+ * limits are a security boundary, not tidiness:
+ *
+ *   - every candidate must resolve INSIDE the project root, checked after
+ *     symlink resolution, so `../../.ssh/id_rsa` in a crafted error cannot
+ *     walk out
+ *   - secret-shaped names (.env, *.pem, id_rsa, *.key) are never read even
+ *     when they sit inside the root
+ *   - source extensions only, MAX_FILES files, MAX_BYTES each
+ *
+ * Frame ORDERING is duplicated from apps/extension/src/errorPaths.ts on
+ * purpose: this package publishes to npm standalone and cannot import from the
+ * extension. The rule both must keep — Python innermost LAST, JS innermost
+ * FIRST — is stated in both files and tested in both.
+ */
+import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, basename, extname } from 'node:path';
+
+/** Files read per request. Three frames is a cause, a caller, and one spare. */
+export const MAX_FILES = 3;
+/** Per file. Larger than this and the window, not the file, is what we send. */
+export const MAX_BYTES = 256_000;
+/** Lines of context either side of the failing line. */
+export const WINDOW = 40;
+
+const SOURCE_EXT = new Set([
+  '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+  '.py', '.go', '.rs', '.rb', '.java', '.kt', '.php', '.cs', '.swift',
+  '.vue', '.svelte',
+]);
+
+const VENDOR = /(^|\/)(node_modules|site-packages|\.venv|venv|vendor|dist|build|\.next|target)(\/|$)/;
+
+export interface Frame {
+  path: string;
+  line: number | null;
+}
+
+export interface ResolvedFile {
+  /** Path as it will be shown to the model — relative to the root when inside it. */
+  label: string;
+  line: number | null;
+  text: string;
+  /** True when only a window around `line` was sent, not the whole file. */
+  windowed: boolean;
+}
+
+// ── Frame extraction ─────────────────────────────────────────────────────────
+//
+// Same shapes as the extension's parser, but this one keeps the LINE NUMBER and
+// returns every frame rather than one best guess: the window we send is built
+// around the line, and a cause plus its caller is usually worth two reads.
+
+const PY_FRAME   = /File ["']([^"'\r\n]+\.py)["'],\s*line\s*(\d+)/g;
+const PY_TEST_ID = /([\w./\\-]+\.py)::/g;
+const PY_LINE_REF = /(?:^|\s)([\w./\\-]+\.py):(\d+):/gm;
+const JS_FRAME   = /(?:at\s+\S+\s+\()?((?:[A-Za-z]:)?[^\s()]+\.(?:js|ts|jsx|tsx|mjs|cjs)):(\d+)/g;
+/** Go, Rust, Ruby, Java and friends: `path/file.ext:123` on its own. */
+const GENERIC    = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.(?:go|rs|rb|java|kt|php|cs|swift|vue|svelte)):(\d+)/g;
+
+function collect(text: string, re: RegExp, withLine: boolean): Frame[] {
+  return [...text.matchAll(re)].map((m) => ({
+    path: m[1],
+    line: withLine && m[2] ? Number(m[2]) : null,
+  }));
+}
+
+function isVendor(p: string): boolean {
+  return VENDOR.test(p.replace(/\\/g, '/'));
+}
+
+/**
+ * Frames in the order worth reading: innermost user frame first.
+ *
+ * Python tracebacks print outermost-first, so the interesting frame is LAST and
+ * the list is reversed. JS stacks print innermost-first and are read forward.
+ * Getting this backwards names the caller instead of the bug — the exact
+ * regression the extension shipped and had to fix.
+ */
+export function extractFrames(errorText: string): Frame[] {
+  if (!errorText) return [];
+
+  const out: Frame[] = [];
+  const seen = new Set<string>();
+  const push = (f: Frame): void => {
+    const key = `${f.path}:${f.line ?? ''}`;
+    if (!isVendor(f.path) && !seen.has(key)) {
+      seen.add(key);
+      out.push(f);
+    }
+  };
+
+  collect(errorText, PY_FRAME, true).reverse().forEach(push);
+  collect(errorText, JS_FRAME, true).forEach(push);
+  collect(errorText, GENERIC, true).forEach(push);
+  // Test-runner shapes carry no frame at all. Last, because a pytest node id
+  // names the TEST file, which is a weaker guess than any real frame.
+  collect(errorText, PY_LINE_REF, true).forEach(push);
+  collect(errorText, PY_TEST_ID, false).forEach(push);
+
+  return out;
+}
+
+// ── Safety ───────────────────────────────────────────────────────────────────
+
+/** Inside `root` after symlinks resolve? The check that stops `../../.ssh/…`. */
+export function isInsideRoot(candidate: string, root: string): boolean {
+  let realRoot: string;
+  let realCandidate: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    return false;
+  }
+  try {
+    realCandidate = realpathSync(candidate);
+  } catch {
+    // Not a real file. Nothing to read, so nothing to allow.
+    return false;
+  }
+  const rel = relative(realRoot, realCandidate);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * The extension ALLOWLIST is the mechanism — there is deliberately no secret
+ * denylist beside it.
+ *
+ * A denylist was written here first and deleted. Everything it caught was
+ * already unreachable: `.env`, `id_rsa` and `credentials` have no extension,
+ * `.env.local` extends to `.local`, `server.pem` to `.pem` — none are in
+ * SOURCE_EXT, so all four were refused before the denylist was consulted. It
+ * bought nothing.
+ *
+ * What it did buy was a bug. `^\.?env(\..+)?$` also matches `env.js` and
+ * `env.ts`, and `src/env.ts` is a real, common source file (it is the standard
+ * name for typed environment schemas). A config error names that file more
+ * often than any other, and the denylist would have silently dropped it while
+ * looking like a security control.
+ *
+ * If a denylist is ever wanted back, it needs a case the allowlist does not
+ * already cover, and a test proving it.
+ */
+export function isReadableSource(p: string): boolean {
+  return SOURCE_EXT.has(extname(p).toLowerCase());
+}
+
+// ── Reading ──────────────────────────────────────────────────────────────────
+
+/**
+ * Candidate absolute paths for one frame, best first.
+ *
+ * A trace may carry an absolute path (already correct), a path relative to the
+ * root, or a path relative to a subdirectory the process ran from. All three
+ * are tried; the first that exists and passes the root check wins.
+ */
+function candidatesFor(frame: Frame, root: string, cwd: string): string[] {
+  const p = frame.path.replace(/^file:\/\//, '');
+  if (isAbsolute(p)) return [p];
+  const out = [join(root, p), join(cwd, p)];
+  // `src/app/x.ts` printed from inside `src/` — strip one leading segment.
+  const stripped = p.split('/').slice(1).join('/');
+  if (stripped) out.push(join(root, stripped));
+  return out;
+}
+
+function windowAround(text: string, line: number | null): { text: string; windowed: boolean } {
+  if (line === null) {
+    const lines = text.split('\n');
+    if (lines.length <= WINDOW * 2 + 1) return { text, windowed: false };
+    return { text: lines.slice(0, WINDOW * 2 + 1).join('\n'), windowed: true };
+  }
+  const lines = text.split('\n');
+  if (lines.length <= WINDOW * 2 + 1) return { text, windowed: false };
+  const start = Math.max(0, line - 1 - WINDOW);
+  const end = Math.min(lines.length, line + WINDOW);
+  return { text: lines.slice(start, end).join('\n'), windowed: true };
+}
+
+function readOne(frame: Frame, root: string, cwd: string): ResolvedFile | null {
+  for (const candidate of candidatesFor(frame, root, cwd)) {
+    if (!isReadableSource(candidate)) continue;
+    if (!isInsideRoot(candidate, root)) continue;
+    try {
+      const st = statSync(candidate);
+      if (!st.isFile()) continue;
+      const raw = st.size > MAX_BYTES
+        ? readFileSync(candidate, 'utf8').slice(0, MAX_BYTES)
+        : readFileSync(candidate, 'utf8');
+      const win = windowAround(raw, frame.line);
+      const real = realpathSync(candidate);
+      const rel = relative(realpathSync(root), real);
+      return { label: rel || basename(real), line: frame.line, text: win.text, windowed: win.windowed };
+    } catch {
+      continue; // unreadable, binary, permissions — try the next candidate
+    }
+  }
+  return null;
+}
+
+/**
+ * Read the source behind an error. Returns null when there is nothing honest to
+ * send, which is a real answer: a wrong file is worse than no file, and the
+ * engine's own advice path handles the empty case.
+ *
+ * Never throws. A debug request that loses local context is worth far more than
+ * one that fails because a path was odd.
+ */
+export function resolveSourceContext(opts: {
+  errorText: string;
+  filePath?: string;
+  root: string;
+  cwd?: string;
+  maxFiles?: number;
+}): { snippet: string; files: ResolvedFile[] } | null {
+  const cwd = opts.cwd ?? opts.root;
+  const maxFiles = opts.maxFiles ?? MAX_FILES;
+
+  try {
+    const frames: Frame[] = [];
+    // An explicit filePath from the agent outranks anything parsed out of text.
+    // Its line, if the trace names one for the same file, comes along.
+    if (opts.filePath) {
+      const fromText = extractFrames(opts.errorText)
+        .find((f) => f.path.endsWith(basename(opts.filePath!)));
+      frames.push({ path: opts.filePath, line: fromText?.line ?? null });
+    }
+    frames.push(...extractFrames(opts.errorText));
+
+    const files: ResolvedFile[] = [];
+    const takenLabels = new Set<string>();
+    for (const frame of frames) {
+      if (files.length >= maxFiles) break;
+      const got = readOne(frame, opts.root, cwd);
+      if (got && !takenLabels.has(got.label)) {
+        takenLabels.add(got.label);
+        files.push(got);
+      }
+    }
+
+    if (files.length === 0) return null;
+    return { snippet: formatSnippet(files), files };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One block per file, labelled with the path and the failing line.
+ *
+ * The label matters as much as the code: the engine's v2 contract derives
+ * machine-applicable edits from what it was sent, and an edit is only
+ * applicable if the file it names is the file the agent can open.
+ */
+export function formatSnippet(files: ResolvedFile[]): string {
+  return files
+    .map((f) => {
+      const where = f.line !== null ? `${f.label}:${f.line}` : f.label;
+      const note = f.windowed
+        ? ` (lines around ${f.line ?? 1}; file truncated for context budget)`
+        : '';
+      return `--- ${where}${note} ---\n${f.text}`;
+    })
+    .join('\n\n');
+}

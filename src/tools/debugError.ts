@@ -4,7 +4,8 @@ import type { BackendConfig, DebugFix } from '../backend.js';
 import { callDebugBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
 import { resolveAuth } from './authGate.js';
-import { getProjectId } from '../project.js';
+import { getProjectId, getProjectRoot } from '../project.js';
+import { resolveSourceContext } from '../sourceContext.js';
 
 // Tri-state verification labeling (docs/plan-v2-contract-phase1.md §1).
 // The null case is rendered ON PURPOSE: a confidence number nothing checked
@@ -56,6 +57,8 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         '"debug this stack trace", "fix this exception", "analyze this traceback", or shows a ' +
         'Traceback / TypeError / ReferenceError / AttributeError. ' +
         'Works for Python, JavaScript, TypeScript, Go, Rust. ' +
+        'Pass the raw error text — this server runs locally and reads the source files the ' +
+        'stack trace names, so you do not need to locate and paste the code first. ' +
         'Returns root cause explanation plus up to 3 ranked fixes with machine-applicable code edits. ' +
         'After applying a fix, report whether it worked via the report_outcome tool.',
       inputSchema: {
@@ -70,7 +73,11 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         codeSnippet: z
           .string()
           .optional()
-          .describe('Surrounding code lines near where the error was thrown, if available.'),
+          .describe(
+            'Optional. Surrounding code near where the error was thrown. Usually unnecessary — ' +
+            'the server reads the files the trace names off local disk. Supply it only when the ' +
+            'relevant code is somewhere the trace does not name; it overrides the local read.',
+          ),
         filePath: z
           .string()
           .optional()
@@ -85,13 +92,30 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       const gate = await resolveAuth(config);
       if (!gate.ok) return gate.result;
 
+      // Local source resolution. The agent's own snippet always wins — it knows
+      // what it was looking at. This only fills the gap, and the gap was the
+      // normal case: an agent that pastes a traceback and nothing else used to
+      // get "Insufficient context for specific fix" at 20% confidence, because
+      // the engine's only other source of code is a pgvector index that nothing
+      // outside the VS Code extension ever populates. See ../sourceContext.ts.
+      let resolved: ReturnType<typeof resolveSourceContext> = null;
+      if (!codeSnippet) {
+        resolved = resolveSourceContext({
+          errorText,
+          filePath,
+          root: getProjectRoot(),
+        });
+      }
+      const snippet = codeSnippet ?? resolved?.snippet;
+      const effectiveFilePath = filePath ?? resolved?.files[0]?.label;
+
       try {
         const result = await callDebugBackend(
           {
             error_message:  errorText,
             language:       language !== 'auto' ? language : undefined,
-            code_snippet:   codeSnippet,
-            file_path:      filePath,
+            code_snippet:   snippet,
+            file_path:      effectiveFilePath,
             // Project scope. Team Error Memory is project-scoped in the engine:
             // without this, recurrence is never recalled and never recorded, and
             // the confirmed-fix promotion in feedback.ts cannot match. Derived
@@ -130,6 +154,13 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         }
 
         const badges: string[] = [];
+        // Named, not counted. "Read 2 files" is unverifiable; "read src/api.ts,
+        // src/db.ts" lets the agent notice DebugAI looked at the wrong thing —
+        // which is the failure mode local resolution introduces and the one
+        // worth making visible.
+        if (resolved) {
+          badges.push(`Read locally: ${resolved.files.map((f) => f.label).join(', ')}`);
+        }
         if (result.model_used)           { badges.push(`Model: ${result.model_used}`); }
         if (result.has_project_context)  { badges.push('Codebase-aware: yes'); }
         if (result.cached)               { badges.push('Cached: yes'); }
@@ -165,6 +196,9 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             memory_hit:           result.memory_hit ?? false,
             memory_times_seen:    result.memory_times_seen ?? null,
             memory_fix_confirmed: result.memory_fix_confirmed ?? false,
+            // Which files this server read off disk, if any. Empty when the
+            // agent supplied its own snippet or nothing resolved.
+            local_files_read:     resolved?.files.map((f) => f.label) ?? [],
           },
         };
       } catch (err) {
