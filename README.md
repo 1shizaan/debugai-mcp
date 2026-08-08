@@ -185,6 +185,12 @@ Run `npx -y @debugai/mcp doctor` first. It checks your Node version, whether a k
 
 ## Changelog
 
+**Note on updates**: the analysis runs on DebugAI's servers, so improvements to
+error parsing, retrieval and root-cause quality reach you without upgrading this
+package. Recent server-side work: pytest, unittest, jest, vitest and mocha output
+now yields real file paths, so a failing test gets cross-file context instead of
+none. Client releases are only for things that change on your machine.
+
 **2.1.1**: metadata only. Adds `mcpName` for official MCP registry ownership verification, fixes the npm package page's repository link.
 
 **2.1.0**: one-command setup. Browser sign-in over a device link (no key pasting), automatic client config writing with backups, `doctor` for diagnosing a broken setup, and in-conversation sign-in when an agent calls a tool before you have an account.
