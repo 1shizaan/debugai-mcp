@@ -214,10 +214,68 @@ describe('project scope and error memory', () => {
     const text = textOf(result);
     expect(text).toContain('Seen before');
     expect(text).toContain('3x before in this project');
-    expect(text).toContain('confirmed');
+    // Not "confirmed working". A click is acceptance, not evidence, and this
+    // string said otherwise until 2026-08-21. An agent reading "confirmed"
+    // treats it as settled; the honest version says what actually happened.
+    expect(text).toContain('accepted by a developer');
+    expect(text).toContain('nothing has observed it working');
+    expect(text).not.toContain('confirmed working');
     expect(result.structuredContent).toMatchObject({
       memory_hit: true, memory_times_seen: 3, memory_fix_confirmed: true,
     });
+  });
+
+  // The three states below did not exist here. A fix that had been tried and
+  // FAILED rendered identically to one nobody had ever tried, so an agent
+  // would re-propose the failed fix. That is the loop this closes.
+
+  async function memoryText(extra: Record<string, unknown>) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      root_cause: 'x',
+      fixes: [{ rank: 1, title: 'f', description: 'd', confidence: 90 }],
+      memory_hit: true,
+      memory_times_seen: 3,
+      ...extra,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error', arguments: { errorText: 'boom' },
+    }) as CallToolResult;
+    return { text: textOf(result), result };
+  }
+
+  it('says a fix was verified by observation when it actually was', async () => {
+    const { text } = await memoryText({
+      memory_fix_confirmed: true, memory_fix_state: 'confirmed', memory_verified_count: 2,
+    });
+    expect(text).toContain('VERIFIED BY OBSERVATION 2x');
+    expect(text).toContain('watched the error stop');
+  });
+
+  it('tells the agent a prior fix is unproven after one recurrence', async () => {
+    const { text } = await memoryText({
+      memory_fix_confirmed: false, memory_fix_state: 'unproven',
+    });
+    expect(text).toContain('RECURRED ONCE SINCE');
+    expect(text).toContain('unproven');
+    // Must not read as "nobody has tried anything", which is what the old
+    // two-branch version said for exactly this case.
+    expect(text).not.toContain('No fix has been confirmed');
+  });
+
+  it('warns the agent off a fix that was tried and kept failing', async () => {
+    const { text } = await memoryText({
+      memory_fix_confirmed: false, memory_fix_state: 'anti_pattern',
+    });
+    expect(text).toContain('THE ERROR KEPT HAPPENING');
+    expect(text).toContain('did not work');
+    expect(text).toContain('somewhere it does not touch');
+    expect(text).not.toContain('No fix has been confirmed');
+  });
+
+  it('falls back to the boolean against an engine that sends no state', async () => {
+    const { text } = await memoryText({ memory_fix_confirmed: false });
+    expect(text).toContain('No fix has been confirmed for it yet');
   });
 
   it('distinguishes "seen before" from "seen and fixed"', async () => {

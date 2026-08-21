@@ -57,6 +57,15 @@ export interface DebugResponse {
   memory_hit?: boolean;
   memory_times_seen?: number;
   memory_fix_confirmed?: boolean;
+  /**
+   * Four-valued: 'none' | 'confirmed' | 'unproven' | 'anti_pattern'. Sent by
+   * the engine since 2026-08-21. Absent from an older engine, where
+   * memory_fix_confirmed is the whole story — and that boolean now goes false
+   * on demotion, so the degraded reading is safe rather than wrong.
+   */
+  memory_fix_state?: string;
+  /** Times a live session watched the error stop after the fix. A click does not count. */
+  memory_verified_count?: number;
 }
 
 // report_outcome → POST /user/debug-feedback (the unified outcome pipeline —

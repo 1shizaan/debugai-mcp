@@ -146,11 +146,50 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           const seen = typeof result.memory_times_seen === 'number'
             ? `${result.memory_times_seen}x before in this project`
             : 'before in this project';
-          sections.push(
-            result.memory_fix_confirmed
-              ? `\n## Seen before\nThis error has been seen ${seen}, and a fix was confirmed working. The confirmed fix led the analysis above.`
-              : `\n## Seen before\nThis error has been seen ${seen}. No fix has been confirmed for it yet.`,
-          );
+          // Four states, not two. Until 2026-08-21 this said "a fix was
+          // confirmed working" on the strength of somebody clicking Apply,
+          // and a fix that had been tried and FAILED was indistinguishable
+          // from one nobody had ever tried — both fell into the else branch
+          // and read "no fix has been confirmed yet". An agent reading that
+          // will happily re-propose the fix that already did not work, which
+          // is the loop this whole change exists to break.
+          //
+          // memory_fix_state is what the engine sends now. When it is absent
+          // (older engine) the boolean still decides, exactly as before.
+          const state = typeof result.memory_fix_state === 'string'
+            ? result.memory_fix_state
+            : (result.memory_fix_confirmed ? 'confirmed' : 'none');
+          const verified = typeof result.memory_verified_count === 'number'
+            ? result.memory_verified_count
+            : 0;
+
+          let memoryBody: string;
+          if (state === 'confirmed' && verified > 0) {
+            memoryBody =
+              `This error has been seen ${seen}. A fix for it was VERIFIED BY ` +
+              `OBSERVATION ${verified}x: a live session watched the error stop ` +
+              `after that fix was applied. It led the analysis above.`;
+          } else if (state === 'confirmed') {
+            memoryBody =
+              `This error has been seen ${seen}. A fix for it was applied and ` +
+              `accepted by a developer, though nothing has observed it working. ` +
+              `It led the analysis above. Treat it as a strong lead, not proof.`;
+          } else if (state === 'unproven') {
+            memoryBody =
+              `This error has been seen ${seen}. A fix was applied for it and ` +
+              `THE ERROR HAS RECURRED ONCE SINCE, so that fix is unproven. The ` +
+              `analysis above was told not to lead with it.`;
+          } else if (state === 'anti_pattern') {
+            memoryBody =
+              `This error has been seen ${seen}. A fix was applied for it and ` +
+              `THE ERROR KEPT HAPPENING. That fix did not work and the analysis ` +
+              `above was told not to propose it again. If you are about to ` +
+              `suggest something equivalent, the cause is somewhere it does not ` +
+              `touch.`;
+          } else {
+            memoryBody = `This error has been seen ${seen}. No fix has been confirmed for it yet.`;
+          }
+          sections.push(`\n## Seen before\n${memoryBody}`);
         }
 
         const badges: string[] = [];
@@ -196,6 +235,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             memory_hit:           result.memory_hit ?? false,
             memory_times_seen:    result.memory_times_seen ?? null,
             memory_fix_confirmed: result.memory_fix_confirmed ?? false,
+            memory_fix_state:     result.memory_fix_state ?? null,
             // Which files this server read off disk, if any. Empty when the
             // agent supplied its own snippet or nothing resolved.
             local_files_read:     resolved?.files.map((f) => f.label) ?? [],
