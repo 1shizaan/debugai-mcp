@@ -150,9 +150,16 @@ You do not need this package. The [DebugAI extension](https://marketplace.visual
 
 Where it goes:
 
+> **On Claude Code, `--scope user` is the part that matters.** `claude mcp add`
+> defaults to `--scope local`, which writes the server under
+> `projects."/your/dir".mcpServers` — it then works in that one directory and
+> nowhere else, which reads exactly like DebugAI needing to be set up per repo.
+> `debugai-mcp install` always writes the user scope. If you already ran the
+> local-scope version, `debugai-mcp doctor` now tells you which one you have.
+
 | Client | File |
 |--------|------|
-| Claude Code | `~/.claude.json` (or `claude mcp add debugai -- npx -y @debugai/mcp`) |
+| Claude Code | `~/.claude.json`, top-level `mcpServers` (or `claude mcp add --scope user debugai -- npx -y @debugai/mcp`) |
 | Claude Desktop | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows `%APPDATA%\Claude\claude_desktop_config.json` |
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |

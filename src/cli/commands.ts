@@ -30,7 +30,7 @@ import {
   knownClients,
   type McpClient,
 } from './clients.js';
-import { applyToClient, isInstalled, type InstallResult } from './install.js';
+import { applyToClient, findInstall, isInstalled, type InstallResult } from './install.js';
 import { FAIL, INFO, OK, WARN, bold, codeBox, dim, heading, openBrowser, say, yellow } from './ui.js';
 
 // ── shared helpers ───────────────────────────────────────────────────────────
@@ -240,7 +240,12 @@ function listClients(env: NodeJS.ProcessEnv): void {
   heading('Known MCP clients');
   for (const c of knownClients(env)) {
     const mark = isDetected(c) ? OK() : INFO();
-    const state = isDetected(c) ? (isInstalled(c) ? 'detected · debugai configured' : 'detected') : 'not found';
+    const site = isDetected(c) ? findInstall(c) : null;
+    const state = !isDetected(c)
+      ? 'not found'
+      : site?.scope === 'user'    ? 'detected · debugai configured'
+      : site?.scope === 'project' ? 'detected · debugai configured (one directory only)'
+      : 'detected';
     say(`  ${mark} ${bold(c.id.padEnd(15))} ${c.label.padEnd(22)} ${dim(state)}`);
     say(`      ${dim(c.configPath ?? 'no config path on this OS')}`);
     if (c.note) say(`      ${dim(c.note)}`);
@@ -355,8 +360,21 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
     say(`  ${INFO()} None detected. "debugai-mcp install --list" shows every supported client.`);
   }
   for (const c of detected) {
-    if (isInstalled(c)) pass(`${c.label} — debugai configured`, c.configPath ?? undefined);
-    else say(`  ${WARN()} ${yellow(`${c.label} — installed but DebugAI is not in its config`)}\n      ${dim(`fix: debugai-mcp install --client=${c.id}`)}`);
+    const site = findInstall(c);
+    if (site?.scope === 'user') {
+      pass(`${c.label} — debugai configured`, c.configPath ?? undefined);
+    } else if (site?.scope === 'project') {
+      // Working, but only in one directory, and somebody who does not know that
+      // concludes DebugAI has to be set up per repo. That belief is what makes
+      // an MCP server not worth installing, so this is a warning with the exact
+      // command to widen it rather than a quiet pass.
+      say(`  ${WARN()} ${yellow(`${c.label} — debugai configured for ONE directory only`)}`);
+      say(`      ${dim(site.projectPath ?? '')}`);
+      say(`      ${dim('`claude mcp add` defaults to --scope local. To use DebugAI in every repo:')}`);
+      say(`      ${dim(`debugai-mcp install --client=${c.id}`)}`);
+    } else {
+      say(`  ${WARN()} ${yellow(`${c.label} — installed but DebugAI is not in its config`)}\n      ${dim(`fix: debugai-mcp install --client=${c.id}`)}`);
+    }
   }
 
   say();

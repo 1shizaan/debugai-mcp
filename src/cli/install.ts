@@ -159,14 +159,69 @@ export function applyToClient(client: McpClient, opts: InstallOptions = {}): Ins
   };
 }
 
-/** True when the client's config already points at this server. */
-export function isInstalled(client: McpClient): boolean {
-  if (!client.configPath || !existsSync(client.configPath)) return false;
+/**
+ * Where a client's config points at this server, if anywhere.
+ *
+ * ## Why this is not a boolean any more
+ *
+ * Claude Code stores MCP servers in two places in one file, and the difference
+ * decides whether DebugAI works in every repo or exactly one:
+ *
+ *   ~/.claude.json
+ *   ├── mcpServers            ← user scope. Every directory, every session.
+ *   └── projects
+ *       └── /home/me/thing
+ *           └── mcpServers    ← local scope. That one directory only.
+ *
+ * `claude mcp add` writes the SECOND one, because `--scope local` is its
+ * default. This function used to read only the first, so the officially
+ * documented install path produced a config that `doctor` then reported as
+ * missing — a diagnostic contradicting a working install, which is worse than
+ * no diagnostic, because it sends somebody to re-run an installer that then
+ * creates a duplicate entry in the other scope.
+ *
+ * Reported by an agent running a real build on 2026-08-24, who lost a whole
+ * session to it. Their words: "two documented paths disagree, and the
+ * diagnostic sides with the wrong one."
+ *
+ * The scope is returned rather than flattened away because the two are not
+ * equally good. A local-scope install is the thing that makes somebody think
+ * they have to reconfigure DebugAI per directory, and telling them where it
+ * actually is turns that into a one-line fix.
+ */
+export interface InstallSite {
+  /** 'user' works everywhere. 'project' works in `projectPath` only. */
+  scope: 'user' | 'project';
+  /** Which directory it is scoped to, for 'project'. */
+  projectPath?: string;
+}
+
+export function findInstall(client: McpClient): InstallSite | null {
+  if (!client.configPath || !existsSync(client.configPath)) return null;
+  const has = (v: unknown): boolean =>
+    Boolean(v && typeof v === 'object' && SERVER_NAME in (v as object));
   try {
     const parsed = parseJsonc(readFileSync(client.configPath, 'utf8'));
-    const servers = (parsed.value as Record<string, unknown>)?.[serversKey(client.shape)];
-    return Boolean(servers && typeof servers === 'object' && SERVER_NAME in (servers as object));
+    const root = parsed.value as Record<string, unknown> | undefined;
+    if (has(root?.[serversKey(client.shape)])) return { scope: 'user' };
+
+    // Claude Code's per-directory scope. Other clients have no `projects` key,
+    // so this loop simply never runs for them rather than needing a special case.
+    const projects = root?.projects;
+    if (projects && typeof projects === 'object') {
+      for (const [dir, cfg] of Object.entries(projects as Record<string, unknown>)) {
+        if (cfg && typeof cfg === 'object' && has((cfg as Record<string, unknown>).mcpServers)) {
+          return { scope: 'project', projectPath: dir };
+        }
+      }
+    }
+    return null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** True when the client's config points at this server in ANY scope. */
+export function isInstalled(client: McpClient): boolean {
+  return findInstall(client) !== null;
 }

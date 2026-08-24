@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseJsonc, stripJsonComments, stripTrailingCommas } from '../src/cli/jsonc.js';
-import { applyToClient, isInstalled } from '../src/cli/install.js';
+import { applyToClient, findInstall, isInstalled } from '../src/cli/install.js';
 import { serverEntry, serversKey, type McpClient } from '../src/cli/clients.js';
 
 let dir: string;
@@ -193,5 +193,75 @@ describe('applyToClient', () => {
     mkdirSync(join(dir, 'sub'));
     applyToClient(clientAt('sub/mcp.json'));
     expect(readdirSync(join(dir, 'sub')).filter((f) => f.includes('.tmp-'))).toEqual([]);
+  });
+});
+
+// ── Config scope ─────────────────────────────────────────────────────────────
+//
+// Claude Code keeps MCP servers in two places in one file. `claude mcp add`
+// defaults to the per-directory one, which is why a user who followed our own
+// README ended up with a working install that `doctor` called missing, and
+// concluded DebugAI had to be reconfigured for every repo.
+
+describe('finding an install in either scope', () => {
+  function writeClaude(body: unknown): McpClient {
+    const c = clientAt('claude.json');
+    writeFileSync(c.configPath!, JSON.stringify(body, null, 2));
+    return c;
+  }
+
+  const ENTRY = { debugai: { command: 'npx', args: ['-y', '@debugai/mcp'] } };
+
+  it('finds a user-scope entry and calls it user scope', () => {
+    const site = findInstall(writeClaude({ mcpServers: ENTRY }));
+    expect(site).toEqual({ scope: 'user' });
+  });
+
+  it('finds a project-scope entry, which the old check reported as missing', () => {
+    // The exact shape `claude mcp add` writes with its default --scope local.
+    const site = findInstall(writeClaude({
+      projects: { '/home/me/thing': { mcpServers: ENTRY } },
+    }));
+    expect(site).toEqual({ scope: 'project', projectPath: '/home/me/thing' });
+  });
+
+  it('names the directory, because that is what makes the fix obvious', () => {
+    // "configured somewhere" is not actionable. "configured for /home/me/thing"
+    // tells somebody why it stopped working when they cd'd elsewhere.
+    const site = findInstall(writeClaude({
+      projects: { '/a/one': {}, '/b/two': { mcpServers: ENTRY } },
+    }));
+    expect(site?.projectPath).toBe('/b/two');
+  });
+
+  it('prefers user scope when both exist', () => {
+    // The duplicate state the old install created: a project entry already
+    // there, then `debugai-mcp install` silently adding a second one at root.
+    // User scope is the one that actually governs every directory.
+    const site = findInstall(writeClaude({
+      mcpServers: ENTRY,
+      projects: { '/home/me/thing': { mcpServers: ENTRY } },
+    }));
+    expect(site?.scope).toBe('user');
+  });
+
+  it('is null when neither scope has it', () => {
+    expect(findInstall(writeClaude({
+      mcpServers: { other: {} },
+      projects: { '/home/me/thing': { mcpServers: { other: {} } } },
+    }))).toBeNull();
+  });
+
+  it('tolerates a projects key that is junk rather than throwing', () => {
+    // Read on every doctor run against a file we do not own.
+    for (const projects of [null, 'nope', 42, [], { x: null }, { x: { mcpServers: 'no' } }]) {
+      expect(() => findInstall(writeClaude({ projects }))).not.toThrow();
+    }
+  });
+
+  it('isInstalled stays true for either scope, so nothing downstream regressed', () => {
+    expect(isInstalled(writeClaude({ mcpServers: ENTRY }))).toBe(true);
+    expect(isInstalled(writeClaude({ projects: { '/x': { mcpServers: ENTRY } } }))).toBe(true);
+    expect(isInstalled(writeClaude({ mcpServers: {} }))).toBe(false);
   });
 });
