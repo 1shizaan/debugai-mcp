@@ -28,6 +28,12 @@ yourself only when you already know the relevant code is somewhere the trace
 does not name.
 
 After you apply or abandon a fix, call report_outcome with the debug_log_id.
+Report it even when you ignored the answer and fixed it your own way: pass
+result "unused" and put what actually worked in actualFix. A case DebugAI got
+wrong is worth more to it than one it got right, and "unused" is not the same
+as "failed" — reporting a fix as failed when you never ran it buries it for the
+next person. If the tool could have served you better here, say so in
+toolFeedback; that reaches the people who build it.
 That is what turns a one-off answer into memory for the next person who hits
 the same error. Skipping it costs the user the feature they are paying for.
 

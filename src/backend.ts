@@ -73,9 +73,19 @@ export interface DebugResponse {
 // from the extension; docs/plan-v2-contract-phase1.md §2).
 export interface OutcomeRequest {
   debug_log_id: string;
-  result: 'worked' | 'failed';
+  /**
+   * 'unused' joined on 2026-08-26. An agent that read the fixes, used none of
+   * them and solved it another way previously had to report 'failed', which
+   * marks a fix as tried and beaten when nothing of ours was ever run.
+   */
+  result: 'worked' | 'failed' | 'unused';
   fix_rank?: number;
+  /** An error message observed after a failed fix. Not an explanation. */
   new_error?: string;
+  /** What actually resolved it, when our answer was not what worked. */
+  actual_fix?: string;
+  /** What would have made the tool more useful here. About the tool, not the bug. */
+  tool_feedback?: string;
   source: 'agent';
 }
 
