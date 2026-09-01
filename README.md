@@ -133,6 +133,8 @@ call report_outcome so the project's error memory stays accurate.
 
 You do not need this package. The [DebugAI extension](https://marketplace.visualstudio.com/items?itemName=debugai.debugai) registers the MCP server automatically (VS Code 1.101+) and adds one-click fix apply, proactive scan, and codebase indexing on top. It is on [Open VSX](https://open-vsx.org/extension/debugai/debugai) too, for Cursor, Windsurf, and VSCodium.
 
+The two servers are the same protocol surface and are kept in step by a test that reads both copies as text, because a comment saying "keep these in sync" has failed here before. From extension 2.8.1 the bundled server also does local source resolution, which this package has had since 2.2.0. Until then, an agent on the bundled server that pasted a traceback into a workspace nobody had indexed still got "Insufficient context for specific fix" at 20% confidence, which is the exact answer this feature exists to remove.
+
 ## Manual setup
 
 `setup` covers this, and `install --client=<id>` covers the case where a client is installed somewhere unusual. If you would still rather edit the file yourself, the entry is the same everywhere:
@@ -214,6 +216,18 @@ error parsing, retrieval and root-cause quality reach you without upgrading this
 package. Recent server-side work: pytest, unittest, jest, vitest and mocha output
 now yields real file paths, so a failing test gets cross-file context instead of
 none. Client releases are only for things that change on your machine.
+
+**2.4.0**: `report_outcome` gains `unused`. An agent that solved the problem its
+own way had to report `failed`, which marks a fix as tried and beaten when
+nothing of ours was ever run. Both tool surfaces, the npm server and the one
+bundled in the VS Code extension, now take the same fields.
+
+**2.3.0**: agents get the same four memory states the editor panel does.
+`debug_error` had two branches, and a fix that had been tried and kept failing
+read identically to one nobody had tried. To an agent those are the same
+sentence, so the natural next move is to propose the fix that already did not
+work. The four states now match the panel: confirmed and verified, confirmed,
+unproven, and anti-pattern.
 
 **2.2.0**: two things that were advertised but not delivered.
 
