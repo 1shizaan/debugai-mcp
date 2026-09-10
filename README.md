@@ -199,6 +199,7 @@ Then run `npx -y @debugai/mcp login` once to store your key. If you would rather
 - Simple errors route to a fast model. Ugly cross-file ones route to a stronger one on paid tiers. The `Model:` badge in each response tells you which one answered.
 - Analyses run on DebugAI's servers. The error text, any snippet you pass, and — since 2.2 — the project source files the stack trace names are sent there, and Claude (Anthropic) does the analysis. The response lists every file that was read. Scope and limits are spelled out under [`debug_error`](#it-reads-the-source-the-trace-names-22). Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
 - Errors are remembered per project so a repeat hit starts from a fix that was already confirmed. The project identity is a hash of your repo root path; the path itself is never sent.
+- The VS Code extension reads the project's `requirements.txt`, `pyproject.toml` and `package.json` and the interpreter the editor has selected, which is what lets it tell "not installed" apart from "installed under a different interpreter". This server sends none of that, so on a missing-module error you get the general answer and the check to run, not a verdict. You have a shell and it does not, so the honest division is that you run the check. Reporting those facts back through this server is planned.
 
 ## Troubleshooting
 
@@ -213,9 +214,24 @@ Run `npx -y @debugai/mcp doctor` first. It checks your Node version, whether a k
 
 **Note on updates**: the analysis runs on DebugAI's servers, so improvements to
 error parsing, retrieval and root-cause quality reach you without upgrading this
-package. Recent server-side work: pytest, unittest, jest, vitest and mocha output
-now yields real file paths, so a failing test gets cross-file context instead of
-none. Client releases are only for things that change on your machine.
+package. Client releases are only for things that change on your machine.
+
+Recent server-side work, all of it live for agents already:
+
+- `ModuleNotFoundError` no longer opens with an install command. A read of every
+  one we had answered found five of eight rejected by the agent that received
+  them, for three different causes needing three different fixes: the package
+  was installed under another interpreter, the name was a local file, or the
+  import line was malformed. Rank 1 is now the check that tells those apart.
+- A Python `SyntaxError` is no longer diagnosed as a JavaScript one, and the
+  framework is read from the error text rather than from what the repository
+  contains.
+- Operating-system errors (`Access is denied.`, `No space left on device`) are
+  recognised as errors. Thirty were probed and twenty-eight had been refused.
+- Credentials in the text you send are replaced before anything is stored or
+  reaches a model.
+- pytest, unittest, jest, vitest and mocha output yields real file paths, so a
+  failing test gets cross-file context instead of none.
 
 **2.4.0**: `report_outcome` gains `unused`. An agent that solved the problem its
 own way had to report `failed`, which marks a fix as tried and beaten when
