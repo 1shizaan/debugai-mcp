@@ -65,8 +65,8 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
             '"worked" = you applied a DebugAI fix and the error stopped. ' +
             '"failed" = you applied one and it did not help (or made things worse). ' +
             '"unused" = you did not apply any of them and resolved it another way. ' +
-            'Use "unused" rather than "failed" when nothing of ours was actually run — ' +
-            'they are different facts and reporting the wrong one buries a fix nobody tried.',
+            'Use "unused" rather than "failed" when nothing of ours was actually run. ' +
+            'They are different facts and reporting the wrong one buries a fix nobody tried.',
           ),
         fixRank: z
           .number()
@@ -86,7 +86,7 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
           .optional()
           .describe(
             'What actually resolved the error, when it was not the fix DebugAI suggested. ' +
-            'Free text. Say what the real cause turned out to be and what you changed — ' +
+            'Free text. Say what the real cause turned out to be and what you changed, ' +
             'especially if the cause was in a different layer than the answer addressed ' +
             '(the shell, the runtime version, the environment, a missing package).',
           ),
