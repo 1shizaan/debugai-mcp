@@ -5,6 +5,7 @@ import { callDebugBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
 import { resolveAuth } from './authGate.js';
 import { getProjectId, getProjectRoot } from '../project.js';
+import { memorySection } from '../memorySection.js';
 import { resolveSourceContext } from '../sourceContext.js';
 
 // Tri-state verification labeling (docs/plan-v2-contract-phase1.md §1).
@@ -141,56 +142,11 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         // Memory first, above the badges: "this project has hit this exact
         // error before, and a fix was confirmed" is the one thing here the
         // agent cannot derive from the code in front of it, so it should not
-        // be buried in a metadata footer.
-        if (result.memory_hit) {
-          const seen = typeof result.memory_times_seen === 'number'
-            ? `${result.memory_times_seen}x before in this project`
-            : 'before in this project';
-          // Four states, not two. Until 2026-08-21 this said "a fix was
-          // confirmed working" on the strength of somebody clicking Apply,
-          // and a fix that had been tried and FAILED was indistinguishable
-          // from one nobody had ever tried — both fell into the else branch
-          // and read "no fix has been confirmed yet". An agent reading that
-          // will happily re-propose the fix that already did not work, which
-          // is the loop this whole change exists to break.
-          //
-          // memory_fix_state is what the engine sends now. When it is absent
-          // (older engine) the boolean still decides, exactly as before.
-          const state = typeof result.memory_fix_state === 'string'
-            ? result.memory_fix_state
-            : (result.memory_fix_confirmed ? 'confirmed' : 'none');
-          const verified = typeof result.memory_verified_count === 'number'
-            ? result.memory_verified_count
-            : 0;
-
-          let memoryBody: string;
-          if (state === 'confirmed' && verified > 0) {
-            memoryBody =
-              `This error has been seen ${seen}. A fix for it was VERIFIED BY ` +
-              `OBSERVATION ${verified}x: a live session watched the error stop ` +
-              `after that fix was applied. It led the analysis above.`;
-          } else if (state === 'confirmed') {
-            memoryBody =
-              `This error has been seen ${seen}. A fix for it was applied and ` +
-              `accepted by a developer, though nothing has observed it working. ` +
-              `It led the analysis above. Treat it as a strong lead, not proof.`;
-          } else if (state === 'unproven') {
-            memoryBody =
-              `This error has been seen ${seen}. A fix was applied for it and ` +
-              `THE ERROR HAS RECURRED ONCE SINCE, so that fix is unproven. The ` +
-              `analysis above was told not to lead with it.`;
-          } else if (state === 'anti_pattern') {
-            memoryBody =
-              `This error has been seen ${seen}. A fix was applied for it and ` +
-              `THE ERROR KEPT HAPPENING. That fix did not work and the analysis ` +
-              `above was told not to propose it again. If you are about to ` +
-              `suggest something equivalent, the cause is somewhere it does not ` +
-              `touch.`;
-          } else {
-            memoryBody = `This error has been seen ${seen}. No fix has been confirmed for it yet.`;
-          }
-          sections.push(`\n## Seen before\n${memoryBody}`);
-        }
+        // be buried in a metadata footer. The wording lives in
+        // ../memorySection.ts, byte-identical with the bundled server, because
+        // inlined here it drifted out of that copy entirely.
+        const memory = memorySection(result);
+        if (memory) { sections.push(memory); }
 
         const badges: string[] = [];
         // Named, not counted. "Read 2 files" is unverifiable; "read src/api.ts,

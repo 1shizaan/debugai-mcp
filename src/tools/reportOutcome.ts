@@ -47,7 +47,7 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
     {
       title: 'Report Fix Outcome',
       description:
-        'Report what happened after DebugAI answered — including when you did not use its fix. ' +
+        'Report what happened after DebugAI answered, including when you did not use its fix. ' +
         'Call this ONCE per debug_error response, passing the debug_log_id from it. ' +
         'If you solved the problem another way, say so with result "unused" and put the real ' +
         'fix in actualFix: a case DebugAI got wrong is worth more to it than one it got right. ' +
