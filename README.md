@@ -233,6 +233,16 @@ Recent server-side work, all of it live for agents already:
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
 
+**2.4.2**: the bundled server prints the memory it advertises. This package and
+the copy bundled in the VS Code extension are the same server, and only this one
+was rendering the recurrence count and confirmed fix that both of them promise an
+agent at connect time. The section is now one module both copies call, so there
+is nothing left to keep in step by hand.
+
+**2.4.1**: two tool descriptions repaired. An em-dash strip had cut both of them
+mid-sentence, which matters more here than it reads: a tool description is the
+only thing an agent sees before deciding whether to call this server at all.
+
 **2.4.0**: `report_outcome` gains `unused`. An agent that solved the problem its
 own way had to report `failed`, which marks a fix as tried and beaten when
 nothing of ours was ever run. Both tool surfaces, the npm server and the one
