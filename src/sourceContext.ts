@@ -85,13 +85,42 @@ export interface ResolvedFile {
 const PY_FRAME   = /File ["']([^"'\r\n]+\.py)["'],\s*line\s*(\d+)/g;
 const PY_TEST_ID = /([\w./\\-]+\.py)::/g;
 const PY_LINE_REF = /(?:^|\s)([\w./\\-]+\.py):(\d+):/gm;
-const JS_FRAME   = /(?:at\s+\S+\s+\()?((?:[A-Za-z]:)?[^\s()]+\.(?:js|ts|jsx|tsx|mjs|cjs)):(\d+)/g;
+// THE PATH CLASS MAY NOT EXCLUDE A SPACE. `[^\s()]+` did, and a Windows
+// project path has several — `OneDrive\Desktop`, `My Documents`, and in the
+// account that found this, `Axiom Workspace`. The drive-letter prefix here was
+// already an attempt at Windows support; it did not help, because the class
+// still stopped at the first space and returned a headless fragment that
+// resolves to nothing. This module READS FILES OFF DISK, so the cost is the
+// agent getting "Insufficient context" for a file that is sitting right there.
+//
+// Split in two because the two frame shapes bound a path differently: inside
+// parens the `)` terminates it, so spaces are safe; the bare shape matches
+// after any whitespace and keeps the narrow class, or "Error in my file.ts:1"
+// would resolve to a path.
+const JS_FRAME   = /at\s+(?:[^\n(]*\(\s*)?([^\n()]+?\.(?:js|ts|jsx|tsx|mjs|cjs)):(\d+)/g;
+const JS_BARE    = /(?:^|[\s❯>|►])((?:[A-Za-z]:)?[\w./\\-]+\.(?:js|ts|jsx|tsx|mjs|cjs)):(\d+)/g;
 /** Go, Rust, Ruby, Java and friends: `path/file.ext:123` on its own. */
 const GENERIC    = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.(?:go|rs|rb|java|kt|php|cs|swift|vue|svelte)):(\d+)/g;
 
+// A V8 stack on Windows prints a file: URL, not a path:
+//   file:///C:/Users/R/Axiom%20Workspace/src/App.tsx
+// The scheme, the slash before the drive letter and the percent-encoding all
+// have to come off before this is handed to a filesystem. Kept in step with
+// _normalise_trace_path() in apps/engine/app/services/error_signature.py and
+// normalisePath() in apps/extension/src/errorPaths.ts.
+const PCT = /%[0-9A-Fa-f]{2}/;
+function normalisePath(fp: string): string {
+  try {
+    let p = fp.replace(/^file:\/\/(?:localhost)?\/?/i, '').trim();
+    p = p.replace(/^\/([A-Za-z]:)/, '$1');
+    if (PCT.test(p)) { p = decodeURIComponent(p); }
+    return p || fp;
+  } catch { return fp; }
+}
+
 function collect(text: string, re: RegExp, withLine: boolean): Frame[] {
   return [...text.matchAll(re)].map((m) => ({
-    path: m[1],
+    path: normalisePath(m[1]),
     line: withLine && m[2] ? Number(m[2]) : null,
   }));
 }
@@ -123,6 +152,7 @@ export function extractFrames(errorText: string): Frame[] {
 
   collect(errorText, PY_FRAME, true).reverse().forEach(push);
   collect(errorText, JS_FRAME, true).forEach(push);
+  collect(errorText, JS_BARE, true).forEach(push);
   collect(errorText, GENERIC, true).forEach(push);
   // Test-runner shapes carry no frame at all. Last, because a pytest node id
   // names the TEST file, which is a weaker guess than any real frame.

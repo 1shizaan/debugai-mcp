@@ -261,3 +261,70 @@ describe('formatSnippet', () => {
     expect(out).toMatch(/truncated/i);
   });
 });
+
+// ── Windows paths with spaces ───────────────────────────────────────────────
+// 2026-09-13: one account's project lived in `...\OneDrive\Desktop\Axiom
+// Workspace\...` and every frame class in this repo stopped at the first space.
+// Fixed in four places on one commit — the engine's retrieval, the extension's
+// write target, and both copies of this file. Here the cost is an agent being
+// told "Insufficient context" about a file that is on the disk it is standing on.
+describe('a Windows project path contains spaces', () => {
+    const WIN = 'C:\\Users\\Rayanne\\OneDrive\\Desktop\\Axiom Workspace\\site\\src\\App.tsx';
+
+    it('keeps a parenthesised frame whole, with its line', () => {
+        const f = extractFrames(`Error: x\n    at foo (${WIN}:969:5)`);
+        expect(f[0]).toEqual({ path: WIN, line: 969 });
+    });
+
+    it('keeps a bare frame whole', () => {
+        expect(extractFrames(`Error: x\n    at ${WIN}:12:3`)[0].path).toBe(WIN);
+    });
+
+    it('strips a V8 file: URL and decodes its escaped spaces', () => {
+        const url = 'file:///C:/Users/R/Axiom%20Workspace/src/App.tsx';
+        expect(extractFrames(`Error\n    at h (${url}:12:3)`)[0].path)
+            .toBe('C:/Users/R/Axiom Workspace/src/App.tsx');
+    });
+
+    it('removes a leading slash sitting before the drive letter', () => {
+        expect(extractFrames('Error\n    at f (/C:/Users/R/A B/src/x.ts:3:1)')[0].path)
+            .toBe('C:/Users/R/A B/src/x.ts');
+    });
+
+    it('still finds the bare vitest arrow shape, which carries no "at "', () => {
+        expect(extractFrames('FAIL\n ❯ src/lib/money.ts:9:11')[0].path).toBe('src/lib/money.ts');
+    });
+
+    it('still skips vendored code on a Windows path', () => {
+        const dep = 'C:\\Users\\R\\A B\\node_modules\\rollup\\dist\\x.js';
+        const own = 'C:\\Users\\R\\A B\\src\\app.ts';
+        const paths = extractFrames(`Error\n    at e (${dep}:3:1)\n    at f (${own}:9:2)`).map(f => f.path);
+        expect(paths).toContain(own);
+        expect(paths.some(p => p.includes('node_modules'))).toBe(false);
+    });
+
+    it('does not mistake a function name for a path', () => {
+        expect(extractFrames('Error\n    at Object.handler (src/app.ts:12:3)')[0].path).toBe('src/app.ts');
+    });
+
+    it('a real directory with a space in it is still bounded by its root', () => {
+        // Real files on disk: isInsideRoot resolves through realpathSync, so a
+        // path that does not exist is refused before containment is even
+        // considered. The space in the directory name is the new part, and it
+        // must not weaken the guard — widening the extractor must not widen
+        // what can be READ.
+        const root = mkdtempSync(join(tmpdir(), 'axiom ws-'));
+        try {
+            mkdirSync(join(root, 'src'));
+            writeFileSync(join(root, 'src', 'x.ts'), 'export {};');
+            const outside = mkdtempSync(join(tmpdir(), 'other-'));
+            writeFileSync(join(outside, 'y.ts'), 'export {};');
+
+            expect(isInsideRoot(join(root, 'src', 'x.ts'), root)).toBe(true);
+            expect(isInsideRoot(join(outside, 'y.ts'), root)).toBe(false);
+            expect(isInsideRoot(join(root, 'src', '..', '..', 'etc'), root)).toBe(false);
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+});
