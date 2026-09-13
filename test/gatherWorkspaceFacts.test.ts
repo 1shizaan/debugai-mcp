@@ -7,14 +7,18 @@
  * Next.js app beside a React Native app - because that is the case the feature
  * exists for and the one a fixture would flatten.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { gatherWorkspaceFacts, MANIFEST_FILES, MAX_CSPROJ } from '../src/gatherWorkspaceFacts.js';
+import { gatherWorkspaceFacts, MANIFEST_FILES, MAX_CSPROJ, __resetWorkspaceFactsCache } from '../src/gatherWorkspaceFacts.js';
 
 let root: string;
+
+// Each test gathers fresh: the cache is keyed by root and several tests build
+// a new tree in the same test run.
+beforeEach(() => { __resetWorkspaceFactsCache(); });
 let outside: string;
 
 beforeAll(() => {
@@ -291,6 +295,37 @@ describe('a monorepo keeps its dependencies in subdirectories', () => {
       JSON.stringify({ dependencies: { 'SHOULD.NOT.APPEAR': '1.0.0' } }));
     const f = gatherWorkspaceFacts(d)!;
     expect(f.declared_deps).not.toContain('SHOULD.NOT.APPEAR');
+    rmSync(d, { recursive: true, force: true });
+  });
+});
+
+
+describe('the cache', () => {
+  it('serves the same facts for the same root without walking again', () => {
+    __resetWorkspaceFactsCache();
+    const first = gatherWorkspaceFacts(root);
+    const second = gatherWorkspaceFacts(root);
+    expect(second).toBe(first);   // identity, so it cannot have re-walked
+  });
+
+  it('does not serve one project\'s manifests for another', () => {
+    __resetWorkspaceFactsCache();
+    const a = gatherWorkspaceFacts(root)!;
+    const d = mkdtempSync(join(tmpdir(), 'dbgai-other-'));
+    writeFileSync(join(d, 'package.json'), JSON.stringify({ dependencies: { 'only-in-b': '1.0.0' } }));
+    const b = gatherWorkspaceFacts(d)!;
+    expect(b.declared_deps).toContain('only-in-b');
+    expect(b.declared_deps).not.toEqual(a.declared_deps);
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('does not cache a root that does not exist yet', () => {
+    __resetWorkspaceFactsCache();
+    const d = join(tmpdir(), 'dbgai-appears-' + Date.now());
+    expect(gatherWorkspaceFacts(d)).toBeNull();
+    mkdirSync(d);
+    writeFileSync(join(d, 'package.json'), JSON.stringify({ dependencies: { later: '1.0.0' } }));
+    expect(gatherWorkspaceFacts(d)!.declared_deps).toContain('later');
     rmSync(d, { recursive: true, force: true });
   });
 });

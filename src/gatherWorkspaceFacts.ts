@@ -109,6 +109,26 @@ export const MAX_NESTED_MANIFESTS = 8;
 /** Wall clock. A slow or network filesystem costs the facts, never the debug. */
 export const DEADLINE_MS = 1500;
 
+/**
+ * How long a gathered set stays good.
+ *
+ * The VS Code extension has cached these on the same TTL since 2026-09-10 (it
+ * shares the framework hint's window) and this copy shipped without one - an
+ * agent working through a failing build calls `debug_error` repeatedly, and
+ * every call was walking the tree again. Five minutes is also the CORRECTNESS
+ * bound, and it is the reason the TTL is short rather than long: install a
+ * package and the facts are stale, so the window has to be small enough that a
+ * wrong answer cannot outlive the mistake by much.
+ */
+export const CACHE_TTL_MS = 5 * 60 * 1000;
+
+let cached: { root: string; at: number; facts: GatheredFacts | null } | null = null;
+
+/** Test seam. Never called in production. */
+export function __resetWorkspaceFactsCache(): void {
+  cached = null;
+}
+
 function insideRoot(candidate: string, root: string): boolean {
   let realRoot: string;
   let realCandidate: string;
@@ -238,9 +258,20 @@ export function gatherWorkspaceFacts(root: string | null | undefined): GatheredF
   try {
     if (!root || typeof root !== 'string') { return null; }
     const abs = resolve(root);
+
+    // Keyed by root, not merely time: a single agent process can be pointed at
+    // more than one repository, and serving one project's manifests for another
+    // would be worse than sending nothing at all.
+    const now = Date.now();
+    if (cached && cached.root === abs && (now - cached.at) < CACHE_TTL_MS) {
+      return cached.facts;
+    }
     try {
       if (!statSync(abs).isDirectory()) { return null; }
     } catch {
+      // Deliberately NOT cached. A root that does not exist yet may exist on
+      // the next call (a clone finishing, a folder being opened), and caching
+      // the failure would hold the feature off for five minutes for no reason.
       return null;
     }
 
@@ -314,7 +345,9 @@ export function gatherWorkspaceFacts(root: string | null | undefined): GatheredF
       pythonInterpreter: null,
     });
 
-    return { ...facts, has_env_file: walked.hasEnvFile };
+    const out: GatheredFacts = { ...facts, has_env_file: walked.hasEnvFile };
+    cached = { root: abs, at: now, facts: out };
+    return out;
   } catch {
     return null;
   }
