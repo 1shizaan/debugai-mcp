@@ -7,6 +7,17 @@ export interface DebugRequest {
   file_path?: string;
   project_id?: string;
   framework_hint?: string;
+  /**
+   * What this repository declares, read off disk by the local server.
+   * Optional on purpose: an older gateway ignores an unknown field, and a newer
+   * engine treats its absence as "we do not know" rather than "there is none".
+   * See ../gatherWorkspaceFacts.ts.
+   *
+   * Typed as an opaque object rather than a named shape: this module's job is
+   * to forward JSON, and importing the fact type here would couple the
+   * transport to a contract that gains fields independently of it.
+   */
+  workspace_facts?: object;
 }
 
 // v2 contract (schema_version 2.0): exact search/replace payload derived

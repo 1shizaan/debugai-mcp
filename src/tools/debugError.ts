@@ -7,6 +7,7 @@ import { resolveAuth } from './authGate.js';
 import { getProjectId, getProjectRoot } from '../project.js';
 import { memorySection } from '../memorySection.js';
 import { resolveSourceContext } from '../sourceContext.js';
+import { gatherWorkspaceFacts } from '../gatherWorkspaceFacts.js';
 
 // Tri-state verification labeling (docs/plan-v2-contract-phase1.md §1).
 // The null case is rendered ON PURPOSE: a confidence number nothing checked
@@ -110,6 +111,17 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       const snippet = codeSnippet ?? resolved?.snippet;
       const effectiveFilePath = filePath ?? resolved?.files[0]?.label;
 
+      // What this repository declares - dependency names and the versions its
+      // own manifests pin. The engine cannot read a disk and this process is
+      // sitting on the one that matters.
+      //
+      // Unconditional, unlike the source resolution above: an agent's snippet
+      // can replace what WE would have read, but no agent sends a .csproj, and
+      // 24% of the wrong answers in the 2026-09-13 corpus needed exactly this.
+      // Bounded and total - see ../gatherWorkspaceFacts.ts - so the worst case
+      // is null and a prompt identical to today's.
+      const workspaceFacts = gatherWorkspaceFacts(getProjectRoot());
+
       try {
         const result = await callDebugBackend(
           {
@@ -123,6 +135,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             // from the git repo root so it agrees with the VS Code extension's
             // md5(workspaceFolder) for the same checkout. See ../project.ts.
             project_id:     getProjectId() ?? undefined,
+            workspace_facts: workspaceFacts ?? undefined,
             // framework_hint deliberately omitted: a language ('python') is not a
             // framework ('fastapi'), and sending it bypasses the engine's
             // framework detection — FastAPI/React errors lose their expert hints.

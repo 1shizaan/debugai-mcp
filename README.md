@@ -233,6 +233,13 @@ Recent server-side work, all of it live for agents already:
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
 
+**2.5.0** - The server now reads what your project declares and sends it with the
+error: dependency names and the versions your own manifests pin, including
+`.csproj` for .NET and nested manifests in a monorepo. The engine could never see
+your disk, so it used to guess at third-party APIs - it now knows when a version
+is pinned exactly, and says it does not know when nothing pins it. `.env` is
+never opened; only its existence is reported.
+
 **2.4.2**: the bundled server prints the memory it advertises. This package and
 the copy bundled in the VS Code extension are the same server, and only this one
 was rendering the recurrence count and confirmed fix that both of them promise an
