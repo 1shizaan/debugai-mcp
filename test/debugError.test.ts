@@ -392,3 +392,51 @@ describe('debug_error sends local source when the agent gave none', () => {
     expect(body.code_snippet).toBeUndefined();
   });
 });
+
+/*
+ * The languages production actually sends.
+ *
+ * `language` was a six-value enum until 2026-09-13 and four of the ten
+ * highest-volume accounts were debugging something it refused. One of them
+ * said so in an outcome report: "the tool's Java language enum rejected
+ * 'java'; auto detection was required."
+ *
+ * Read off the PUBLISHED schema through a connected server, because that is
+ * the artefact an agent validates against - not the zod object, which could
+ * be correct while the thing on the wire is not.
+ *
+ * Pinned by the evidence rather than by taste, so shrinking the set means
+ * deleting a row somebody's real session is named in.
+ */
+describe('the language enum covers what people actually debug', () => {
+  const OBSERVED: Array<[string, string]> = [
+    ['java', 'chumaneshkatta, 16 debugs, Spring Boot + Maven'],
+    ['csharp', 'wavoinfinity + salmankabir, 15 debugs, .NET / MSBuild / YARP'],
+    ['css', 'santamark14, 13 debugs, @font-face'],
+    ['lua', 'jtearnest94, 8 debugs, FiveM'],
+    ['html', 'santamark14, the same sessions as the css rows'],
+    ['powershell', 'rayanne, santamark14, salmankabir - the most common shell in the data'],
+  ];
+
+  async function languageSchema(): Promise<{ enum?: string[]; default?: string }> {
+    const { client } = await connectedClient();
+    const { tools } = await client.listTools();
+    const tool = tools.find(t => t.name === 'debug_error')!;
+    return (tool.inputSchema.properties as Record<string, { enum?: string[]; default?: string }>).language;
+  }
+
+  it.each(OBSERVED)('accepts %s', async (lang, _why) => {
+    const schema = await languageSchema();
+    expect(schema.enum).toContain(lang);
+  });
+
+  it('still defaults to auto, because the server decides and the client only hints', async () => {
+    expect((await languageSchema()).default).toBe('auto');
+  });
+
+  it('is still a closed set - widening is not opening', async () => {
+    const schema = await languageSchema();
+    expect(Array.isArray(schema.enum)).toBe(true);
+    expect(schema.enum).not.toContain('klingon');
+  });
+});

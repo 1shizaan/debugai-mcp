@@ -69,9 +69,45 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           .min(1)
           .describe('The full error message, exception, or stack trace text.'),
         language: z
-          .enum(['javascript', 'typescript', 'python', 'go', 'rust', 'auto'])
+          .enum([
+            // Widened 2026-09-13 from six values. The six were javascript,
+            // typescript, python, go, rust and auto, and the omissions were not
+            // theoretical: a production read of the ten highest-volume accounts
+            // found FOUR of them debugging a language this enum refused.
+            //
+            //   java    16 debugs, one account, Spring Boot + Maven all week
+            //   csharp  15 debugs, two accounts, .NET / MSBuild / YARP
+            //   css     13 debugs, one account, @font-face
+            //   lua      8 debugs, one account, FiveM
+            //
+            // One of them told us so in their own outcome report: "the tool's
+            // Java language enum rejected 'java'; auto detection was required."
+            // That is the failure being visible. The quiet half is worse - a
+            // refused value means the agent retries with 'auto', so
+            // debug_logs.language records `unknown` for every one of those
+            // rows, and every language chart we have under-counts exactly the
+            // languages we do not list.
+            //
+            // The engine already reads javac/Maven and MSBuild diagnostics in
+            // error_location.py, so java and csharp were first-class on the
+            // server and unsayable by the client.
+            //
+            // 'auto' stays the default and stays correct: the SERVER decides
+            // language from the error text, this is a hint. The set is closed
+            // so the column stays a closed set (same argument as
+            // index_language.py), and widening it is a one-line change.
+            'javascript', 'typescript', 'python', 'go', 'rust',
+            'java', 'csharp', 'cpp', 'c', 'php', 'ruby', 'kotlin', 'swift',
+            'lua', 'shell', 'powershell', 'sql', 'html', 'css', 'scala',
+            'dart', 'elixir', 'r', 'perl',
+            'auto',
+          ])
           .default('auto')
-          .describe('Source language. Use "auto" to let DebugAI detect from the error.'),
+          .describe(
+            'Source language. Use "auto" to let DebugAI detect from the error — ' +
+            'auto is correct for almost every case, because the server reads the ' +
+            'error text and the client cannot see it more clearly than that.',
+          ),
         codeSnippet: z
           .string()
           .optional()
