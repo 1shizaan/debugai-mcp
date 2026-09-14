@@ -74,7 +74,7 @@ Give it an error, get an analysis.
 | Input | Required | Description |
 |-------|----------|-------------|
 | `errorText` | yes | Full error message, exception, or stack trace. |
-| `language` | no | `javascript`, `typescript`, `python`, `go`, `rust`, or `auto` (default). |
+| `language` | no | `auto` (default), or name it: `javascript`, `typescript`, `python`, `java`, `csharp`, `go`, `rust`, `cpp`, `c`, `php`, `ruby`, `kotlin`, `swift`, `lua`, `shell`, `powershell`, `sql`, `html`, `css`, `scala`, `dart`, `elixir`, `r`, `perl`. Leave it on `auto` unless you have a reason: the server reads the error text and is right about it almost always. |
 | `codeSnippet` | no | Usually unnecessary — see below. Overrides the local read when given. |
 | `filePath` | no | Path to the file that threw. |
 
@@ -232,6 +232,16 @@ Recent server-side work, all of it live for agents already:
   reaches a model.
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
+
+**2.5.1** - `language` accepts 24 languages instead of 6. It listed javascript,
+typescript, python, go, rust and auto, so an agent naming anything else got its
+call rejected and had to retry with `auto`. Four of the ten busiest accounts in
+the September logs were in that position - java, csharp, css and lua, 52 debugs
+between them. The quieter half was worse: the retry succeeds, so every one of
+those rows recorded `language = unknown`, which made a Java stack trace look like
+a detection failure and made every language count under-report exactly the
+languages that were missing. `auto` is still the default and still the right
+answer almost always.
 
 **2.5.0** - The server now reads what your project declares and sends it with the
 error: dependency names and the versions your own manifests pin, including
