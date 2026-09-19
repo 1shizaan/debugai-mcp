@@ -7,6 +7,7 @@ import { createServer } from './server.js';
 import { DEFAULT_TIMEOUT_MS } from './backend.js';
 import { AuthProvider } from './auth.js';
 import { DEFAULT_API_BASE } from './constants.js';
+import { cmdHook } from './cli/hook.js';
 import { configPath, resolveSettings } from './config.js';
 import {
   cmdDoctor,
@@ -47,6 +48,9 @@ Commands:
                    --remove        take the entry back out
   uninstall      remove DebugAI from every client config
   doctor         diagnose setup: key, API reachability, client wiring
+  hook           Claude Code PostToolUseFailure hook: looks each failed shell
+                 command up in project memory and tells the agent what it knows
+                 (see the README, "Claude Code hook")
   (no command)   run the MCP server on stdio — this is what clients launch
 
 Tools exposed to your agent:
@@ -54,6 +58,8 @@ Tools exposed to your agent:
                   fixes with machine-applicable edits (v2 contract). Reads the
                   source files the trace names, from inside this project only —
                   no need to locate and paste code first.
+  lookup_error    instant and free: has this project seen the error, and
+                  which fix was confirmed for it. No model call, no quota
   report_outcome  tell DebugAI whether an applied fix worked — failed-fix
                   follow-ups improve future answers for your codebase
 
@@ -70,7 +76,7 @@ Docs: https://debugai.io/start?src=mcp
 `;
 
 const SUBCOMMANDS = new Set([
-  'setup', 'login', 'logout', 'status', 'install', 'uninstall', 'doctor',
+  'setup', 'login', 'logout', 'status', 'install', 'uninstall', 'doctor', 'hook',
 ]);
 
 async function runSubcommand(name: string, argv: string[]): Promise<number> {
@@ -82,6 +88,7 @@ async function runSubcommand(name: string, argv: string[]): Promise<number> {
     case 'install':   return cmdInstall(argv);
     case 'uninstall': return cmdUninstall(argv);
     case 'doctor':    return cmdDoctor(argv);
+    case 'hook':      return cmdHook(VERSION);
     default:          return 1;
   }
 }
