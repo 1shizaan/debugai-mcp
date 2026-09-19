@@ -66,6 +66,9 @@ export interface DebugResponse {
   error_signature?: string;
   session_id?: string;
   memory_hit?: boolean;
+  /** false when the API received no project and so could not use memory. */
+  memory_enabled?: boolean;
+  memory_disabled_reason?: string;
   memory_times_seen?: number;
   memory_fix_confirmed?: boolean;
   /**

@@ -4,7 +4,9 @@ import type { BackendConfig, DebugFix } from '../backend.js';
 import { callDebugBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
 import { resolveAuth } from './authGate.js';
+import { basename } from 'node:path';
 import { getProjectId, getProjectRoot } from '../project.js';
+import { explicitProject } from '../explicitProject.js';
 import { memorySection } from '../memorySection.js';
 import { resolveSourceContext } from '../sourceContext.js';
 import { gatherWorkspaceFacts } from '../gatherWorkspaceFacts.js';
@@ -39,7 +41,10 @@ export function formatFix(fix: DebugFix, index: number): string {
       '_Machine-applicable edit available: `edits` on this fix in structuredContent carries the exact old/new strings (apply with your Edit/replace tool)._',
     );
   }
-  if (fix.unified_diff) {
+  // The diff repeats the code above it, so in prose it is shown only when
+  // there is no code block. It stays whole in structuredContent (F12 of the
+  // 2026-09-16 field report: each fix repeated its change three times).
+  if (fix.unified_diff && !fix.code) {
     lines.push('```diff', fix.unified_diff.trimEnd(), '```');
   }
   if (fix.verify_with) {
@@ -58,7 +63,9 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         'Use whenever the user pastes an error, asks "why is this failing", "what does this error mean", ' +
         '"debug this stack trace", "fix this exception", "analyze this traceback", or shows a ' +
         'Traceback / TypeError / ReferenceError / AttributeError. ' +
-        'Works for Python, JavaScript, TypeScript, Go, Rust. ' +
+        'Works for Python, JavaScript, TypeScript, Go, Rust, Java, C#, and more. ' +
+        'Also takes a bug with NO error message: describe what you expected, what happened ' +
+        'instead, and the code in between, and it is analysed like any other error. ' +
         'Pass the raw error text — this server runs locally and reads the source files the ' +
         'stack trace names, so you do not need to locate and paste the code first. ' +
         'Returns root cause explanation plus up to 3 ranked fixes with machine-applicable code edits. ' +
@@ -119,14 +126,25 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         filePath: z
           .string()
           .optional()
-          .describe('Absolute or relative path to the file that threw the error, if known.'),
+          .describe(
+            'Absolute or relative path to the file that threw the error, if known. An ABSOLUTE ' +
+            'path also tells DebugAI which repository the error belongs to.',
+          ),
+        projectRoot: z
+          .string()
+          .optional()
+          .describe(
+            'Absolute path of the repository this error came from. Pass it when you were ' +
+            'started somewhere other than that repository: project memory and local file reads ' +
+            'are scoped to it, and without it they are scoped to the folder this server started in.',
+          ),
       },
       annotations: {
         readOnlyHint: true,
         title: 'Debug Error',
       },
     },
-    async ({ errorText, language, codeSnippet, filePath }) => {
+    async ({ errorText, language, codeSnippet, filePath, projectRoot }) => {
       const gate = await resolveAuth(config);
       if (!gate.ok) return gate.result;
 
@@ -136,13 +154,18 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       // get "Insufficient context for specific fix" at 20% confidence, because
       // the engine's only other source of code is a pgvector index that nothing
       // outside the VS Code extension ever populates. See ../sourceContext.ts.
+      // Which project this error belongs to. Named by the caller when it can
+      // be (projectRoot, or the repository an absolute filePath sits in), and
+      // only otherwise the folder this process started in - which is where an
+      // agent was launched, not necessarily what it is working on. See
+      // ../explicitProject.ts for the 2026-09-16 session that proved it.
+      const explicit = explicitProject({ projectRoot, filePath });
+      const root = explicit?.root ?? getProjectRoot();
+      const projectId = explicit?.id ?? getProjectId() ?? undefined;
+
       let resolved: ReturnType<typeof resolveSourceContext> = null;
       if (!codeSnippet) {
-        resolved = resolveSourceContext({
-          errorText,
-          filePath,
-          root: getProjectRoot(),
-        });
+        resolved = resolveSourceContext({ errorText, filePath, root });
       }
       const snippet = codeSnippet ?? resolved?.snippet;
       const effectiveFilePath = filePath ?? resolved?.files[0]?.label;
@@ -156,7 +179,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       // 24% of the wrong answers in the 2026-09-13 corpus needed exactly this.
       // Bounded and total - see ../gatherWorkspaceFacts.ts - so the worst case
       // is null and a prompt identical to today's.
-      const workspaceFacts = gatherWorkspaceFacts(getProjectRoot());
+      const workspaceFacts = gatherWorkspaceFacts(root);
 
       try {
         const result = await callDebugBackend(
@@ -170,7 +193,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             // the confirmed-fix promotion in feedback.ts cannot match. Derived
             // from the git repo root so it agrees with the VS Code extension's
             // md5(workspaceFolder) for the same checkout. See ../project.ts.
-            project_id:     getProjectId() ?? undefined,
+            project_id:     projectId,
             workspace_facts: workspaceFacts ?? undefined,
             // framework_hint deliberately omitted: a language ('python') is not a
             // framework ('fastapi'), and sending it bypasses the engine's
@@ -209,6 +232,13 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         if (result.has_project_context)  { badges.push('Codebase-aware: yes'); }
         if (result.cached)               { badges.push('Cached: yes'); }
         if (result.framework_detected)   { badges.push(`Framework: ${result.framework_detected}`); }
+        // Where memory goes, and which build answered: both invisible on
+        // 2026-09-16, when a stale server ran a whole session with memory off.
+        badges.push(`Project: ${basename(root) || root}${explicit ? ` (from ${explicit.source})` : ''}`);
+        if (result.memory_enabled === false) {
+          badges.push(`Memory: off${result.memory_disabled_reason ? ` (${result.memory_disabled_reason})` : ''}`);
+        }
+        badges.push(`DebugAI MCP ${config.version}`);
         if (badges.length) {
           sections.push(`\n---\n_${badges.join(' · ')}_`);
         }
@@ -244,6 +274,9 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             // Which files this server read off disk, if any. Empty when the
             // agent supplied its own snippet or nothing resolved.
             local_files_read:     resolved?.files.map((f) => f.label) ?? [],
+            project:              { root, source: explicit?.source ?? 'cwd' },
+            memory_enabled:       result.memory_enabled ?? null,
+            mcp_version:          config.version,
           },
         };
       } catch (err) {

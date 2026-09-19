@@ -3,7 +3,9 @@
 // mock of the DebugAI API. Requires `npm run build` first (wired via pretest).
 import { createServer as createHttpServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -66,11 +68,16 @@ afterAll(() => {
   api.close();
 });
 
-async function spawnServer(apiKey: string, extraEnv: Record<string, string> = {}): Promise<Client> {
+async function spawnServer(
+  apiKey: string,
+  extraEnv: Record<string, string> = {},
+  cwd?: string,
+): Promise<Client> {
   const client = new Client({ name: 'e2e-client', version: '0.0.1' });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [distEntry],
+    ...(cwd ? { cwd } : {}),
     env: {
       ...process.env,
       DEBUGAI_API_KEY: apiKey,
@@ -88,6 +95,61 @@ function textOf(result: CallToolResult): string {
   const first = result.content[0];
   return first.type === 'text' ? first.text : '';
 }
+
+// 2026-09-16 field report, F2: an agent started in one folder built a
+// different repository all session, and every error was filed under the folder
+// it started in. Over real stdio against the built CLI: naming the project
+// changes the project_id actually sent, and saying nothing keeps today's.
+describe('the project an error belongs to', () => {
+  function gitRepo(dir: string): string {
+    mkdirSync(dir, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    return dir;
+  }
+  const md5 = (s: string) => createHash('md5').update(s).digest('hex');
+  const toplevel = (d: string) =>
+    execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: d, encoding: 'utf8' }).trim();
+
+  it('is the named repository, not the folder the server started in', async () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'debugai-e2e-proj-')));
+    const startedIn = gitRepo(join(base, 'portfolio'));
+    const project = gitRepo(join(base, 'airgapai'));
+    const client = await spawnServer('dbg_e2e_key', {}, startedIn);
+    try {
+      await client.callTool({ name: 'debug_error', arguments: { errorText: 'ReferenceError: x is not defined' } });
+      expect(lastRequest?.body.project_id).toBe(md5(toplevel(startedIn)));
+
+      const named = await client.callTool({
+        name: 'debug_error',
+        arguments: { errorText: 'ReferenceError: x is not defined', projectRoot: project },
+      }) as CallToolResult;
+      expect(lastRequest?.body.project_id).toBe(md5(toplevel(project)));
+      expect((named.structuredContent as any).project).toEqual({ root: toplevel(project), source: 'projectRoot' });
+      expect(textOf(named)).toContain('Project: airgapai (from projectRoot)');
+
+      writeFileSync(join(project, 'app.py'), 'x = 1\n');
+      await client.callTool({
+        name: 'debug_error',
+        arguments: { errorText: 'NameError: y', filePath: join(project, 'app.py') },
+      });
+      expect(lastRequest?.body.project_id).toBe(md5(toplevel(project)));
+    } finally {
+      await client.close();
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('says which build answered, in every response', async () => {
+    const client = await spawnServer('dbg_e2e_key');
+    try {
+      const r = await client.callTool({ name: 'debug_error', arguments: { errorText: 'ReferenceError: x is not defined' } }) as CallToolResult;
+      expect(textOf(r)).toMatch(/DebugAI MCP \d+\.\d+\.\d+/);
+      expect((r.structuredContent as any).mcp_version).toMatch(/^\d+\.\d+\.\d+$/);
+    } finally {
+      await client.close();
+    }
+  });
+});
 
 describe('spawned CLI over stdio', () => {
   it('handshakes, lists debug_error, and returns a formatted analysis', async () => {

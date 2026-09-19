@@ -3,6 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from '../src/server.js';
+import { formatFix } from '../src/tools/debugError.js';
 
 async function connectedClient() {
   const server = createServer({
@@ -146,8 +147,12 @@ describe('debug_error tool over MCP', () => {
     expect(text).toContain('✓ Verified — import(s) match a file in the retrieved context');
     expect(text).toContain('Not verified — confidence is the model\'s own estimate');
     expect(text).toContain('✗ Failed mechanical check (confidence capped)');
-    // v2 payloads surface in markdown + structuredContent
-    expect(text).toContain('```diff');
+    // v2 payloads surface in markdown + structuredContent. The diff repeats a
+    // fix's code, so the prose carries it only for a fix WITHOUT a code block
+    // (field report F12: each change was shown three times). It is never lost:
+    // structuredContent keeps it whole for every fix.
+    expect(text).not.toContain('```diff');
+    expect((result.structuredContent as any).fixes[0].unified_diff).toContain('+from billing.pricing import apply_discount');
     expect(text).toContain('Syntax-level check after applying');
     expect(text).toContain('report_outcome with debugLogId "log-123"');
     expect(result.structuredContent).toMatchObject({
@@ -159,6 +164,11 @@ describe('debug_error tool over MCP', () => {
     expect(fixes[0].edits[0].old_string).toContain('calculate_discount');
     expect(fixes[1].verified).toBeNull();
     expect(fixes[2].verified).toBe(false);
+  });
+
+  it('still shows the diff for a fix that has no code block, because then it is the only copy', () => {
+    const out = formatFix({ title: 't', description: 'd', confidence: 50, unified_diff: '--- a/x\n+++ b/x\n' } as any, 1);
+    expect(out).toContain('```diff');
   });
 
   it('rejects a missing errorText at the schema layer without calling the backend', async () => {
