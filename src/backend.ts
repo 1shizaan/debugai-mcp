@@ -92,7 +92,7 @@ export interface OutcomeRequest {
    * them and solved it another way previously had to report 'failed', which
    * marks a fix as tried and beaten when nothing of ours was ever run.
    */
-  result: 'worked' | 'failed' | 'unused';
+  result: 'worked' | 'worked_modified' | 'failed' | 'unused';
   fix_rank?: number;
   /** An error message observed after a failed fix. Not an explanation. */
   new_error?: string;
@@ -100,6 +100,8 @@ export interface OutcomeRequest {
   actual_fix?: string;
   /** What would have made the tool more useful here. About the tool, not the bug. */
   tool_feedback?: string;
+  /** The code that worked, when a fix only held after it was changed ('worked_modified'). */
+  final_fix?: string;
   source: 'agent';
 }
 

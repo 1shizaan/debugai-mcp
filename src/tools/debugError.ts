@@ -246,7 +246,8 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         if (result.debug_log_id) {
           sections.push(
             `\nAfter applying a fix, call report_outcome with debugLogId "${result.debug_log_id}", ` +
-            'the fixRank you applied, and result "worked" or "failed" (include newError text if it failed).',
+            'the fixRank you applied, and result "worked", "worked_modified" (with the code that finally ' +
+            'worked in finalFix), "failed" (with newError), or "unused" if you solved it another way.',
           );
         }
 

@@ -39,7 +39,7 @@ describe('report_outcome tool over MCP', () => {
     }) as CallToolResult;
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('fix worked');
+    expect(textOf(result)).toContain('fix 1 worked');
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('https://api.example.test/api/user/debug-feedback');
@@ -51,6 +51,56 @@ describe('report_outcome tool over MCP', () => {
       fix_rank: 1,
       source: 'agent',
     });
+  });
+
+  // Field report 2026-09-16, T1: the fix worked only after the agent changed
+  // it, and 'worked, rank 1' was the closest report available, so memory kept
+  // the suggestion rather than what worked.
+  it('carries the code that finally worked on a worked_modified outcome', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ success: true }), { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'report_outcome',
+      arguments: {
+        debugLogId: 'log-123', result: 'worked_modified', fixRank: 1,
+        finalFix: 'qr.save(buf, kind="png", scale=6, border=4)',
+      },
+    }) as CallToolResult;
+
+    expect(result.isError).toBeFalsy();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).toMatchObject({
+      result: 'worked_modified',
+      final_fix: 'qr.save(buf, kind="png", scale=6, border=4)',
+      source: 'agent',
+    });
+    // The first draft of this answered "Outcome recorded: fix failed" here.
+    expect(textOf(result)).toContain('worked after your changes');
+    expect(textOf(result)).not.toContain('failed');
+  });
+
+  it("relays the API's reason when it refuses a report, and says not to retry it unchanged", async () => {
+    // The API refuses 'worked_modified' with no final code; the rule lives
+    // there, and the agent needs its words, not "retry shortly".
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: "result 'worked_modified' needs final_fix (finalFix in report_outcome): the code that finally worked. If our fix held unchanged, send result 'worked' instead." }),
+      { status: 400 },
+    )));
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'report_outcome',
+      arguments: { debugLogId: 'log-123', result: 'worked_modified', fixRank: 1 },
+    }) as CallToolResult;
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('finalFix in report_outcome');
+    expect(textOf(result)).not.toContain('retry shortly');
+    expect(result.structuredContent).toMatchObject({ error_type: 'invalid_request', retryable: false });
   });
 
   it('carries the follow-up error text on a failed outcome', async () => {

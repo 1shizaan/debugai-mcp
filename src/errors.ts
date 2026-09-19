@@ -70,6 +70,33 @@ export function mapBackendErrorToToolResult(err: unknown): CallToolResult {
     };
   }
 
+  // 400: the API refused the arguments, and its body says why. Retrying the
+  // same call cannot help and changing the arguments can, so this is the one
+  // failure that must not say "retry shortly". Relayed rather than re-derived:
+  // the rule lives in the API, and a copy of it here would drift.
+  if (status === 400) {
+    // Never throws: a body whose `error` is not text falls back to the raw
+    // body, and an empty one to a sentence, so this cannot fail the tool call.
+    const body = tryParseJson(String(message));
+    const stated = (typeof body?.error === 'string' && body.error.trim() ? body.error : String(message ?? '')).trim()
+      || 'the request was malformed';
+    const reason = /[.!?]$/.test(stated) ? stated : `${stated}.`;
+    return {
+      isError: true,
+      content: [{
+        type: 'text',
+        text:
+          `DebugAI refused this call: ${reason} ` +
+          'Change the arguments and call again. The same call unchanged is refused the same way.',
+      }],
+      structuredContent: {
+        error_type: 'invalid_request',
+        reason,
+        retryable: false,
+      },
+    };
+  }
+
   if (status === 429) {
     return {
       isError: true,

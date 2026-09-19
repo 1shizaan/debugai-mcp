@@ -64,6 +64,21 @@ describe('mapBackendErrorToToolResult', () => {
     expect(textOf(result)).toContain('DEBUGAI_API_BASE');
   });
 
+  it('400: relays the API\'s own reason and forbids an unchanged retry', () => {
+    const result = mapBackendErrorToToolResult(backendError(400, JSON.stringify({ error: 'error_message is required' })));
+    expect(textOf(result)).toContain('DebugAI refused this call: error_message is required.');
+    expect(textOf(result)).not.toContain('retry shortly');
+    expect(result.structuredContent).toMatchObject({ error_type: 'invalid_request', retryable: false });
+  });
+
+  it('400: never throws on a body it cannot read', () => {
+    for (const body of ['', 'Bad Request', '{"error":{"nested":1}}', 'null', '"just a string"']) {
+      const result = mapBackendErrorToToolResult(backendError(400, body));
+      expect(result.isError, body).toBe(true);
+      expect(textOf(result), body).toMatch(/^DebugAI refused this call: .+[.!?] Change the arguments/);
+    }
+  });
+
   it('unknown status: generic failure', () => {
     const result = mapBackendErrorToToolResult(backendError(500, 'internal'));
     expect(textOf(result)).toContain('internal');

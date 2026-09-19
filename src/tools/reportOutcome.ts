@@ -4,6 +4,7 @@ import type { BackendConfig } from '../backend.js';
 import { callOutcomeBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
 import { resolveAuth } from './authGate.js';
+import { outcomeAck } from '../outcomeAck.js';
 
 /**
  * The channel back.
@@ -39,7 +40,15 @@ import { resolveAuth } from './authGate.js';
  *
  * A field on a tool agents already call beats a new tool they would have to be
  * told about. This one has a measured ~50% attach rate; a new `send_feedback`
- * starts at zero and competes for the same attention.
+ * starts at zero and competes for the same attention. *
+ * ## And on 2026-09-18, a fourth
+ *
+ *   'worked_modified' + finalFix — one of our fixes held only after the agent
+ *                    changed it. 'worked, rank 1' was the closest report there
+ *                    was, so memory kept our suggestion, which is not what
+ *                    worked (field report 2026-09-16, T1). finalFix is what is
+ *                    remembered now, and the API refuses the verdict without
+ *                    it rather than fall back to promoting ours.
  */
 export function registerReportOutcome(server: McpServer, config: BackendConfig): void {
   server.registerTool(
@@ -52,17 +61,20 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
         'If you solved the problem another way, say so with result "unused" and put the real ' +
         'fix in actualFix: a case DebugAI got wrong is worth more to it than one it got right. ' +
         'If the tool could have helped you more here, say that in toolFeedback. ' +
-        'Confirmed rank-1 fixes are remembered for this project and returned to whoever hits ' +
-        'the same error next.',
+        'A confirmed fix is remembered for this project and returned to whoever hits the same ' +
+        'error next: the fix you name in fixRank, or with "worked_modified" the code you send ' +
+        'in finalFix.',
       inputSchema: {
         debugLogId: z
           .string()
           .min(1)
           .describe('The debug_log_id value from the debug_error response you are reporting on.'),
         result: z
-          .enum(['worked', 'failed', 'unused'])
+          .enum(['worked', 'worked_modified', 'failed', 'unused'])
           .describe(
             '"worked" = you applied a DebugAI fix and the error stopped. ' +
+            '"worked_modified" = one of its fixes worked only after you changed it; finalFix is ' +
+            'then required, and the code in it is what gets remembered. ' +
             '"failed" = you applied one and it did not help (or made things worse). ' +
             '"unused" = you did not apply any of them and resolved it another way. ' +
             'Use "unused" rather than "failed" when nothing of ours was actually run. ' +
@@ -74,7 +86,7 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
           .min(1)
           .max(3)
           .optional()
-          .describe('Which ranked fix you applied (1-3). Rank 1 outcomes feed team error memory. Omit for "unused".'),
+          .describe('Which ranked fix you applied (1-3). The fix you name is the one remembered for this project. Omit for "unused".'),
         newError: z
           .string()
           .max(4000)
@@ -89,6 +101,16 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
             'Free text. Say what the real cause turned out to be and what you changed, ' +
             'especially if the cause was in a different layer than the answer addressed ' +
             '(the shell, the runtime version, the environment, a missing package).',
+          ),
+        finalFix: z
+          .string()
+          .max(4000)
+          .optional()
+          .describe(
+            'Required with result "worked_modified", ignored otherwise: the code that actually ' +
+            'worked, after your changes. It replaces DebugAI\'s suggestion in this project\'s ' +
+            'memory, so the next person who hits this error is handed what worked, not what was ' +
+            'first suggested.',
           ),
         toolFeedback: z
           .string()
@@ -106,7 +128,7 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
         idempotentHint: true,
       },
     },
-    async ({ debugLogId, result, fixRank, newError, actualFix, toolFeedback }) => {
+    async ({ debugLogId, result, fixRank, newError, actualFix, toolFeedback, finalFix }) => {
       const gate = await resolveAuth(config);
       if (!gate.ok) return gate.result;
 
@@ -119,23 +141,12 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
             new_error: newError,
             actual_fix: actualFix,
             tool_feedback: toolFeedback,
+            final_fix: finalFix,
             source: 'agent',
           },
           gate.config,
         );
-        // The acknowledgement is the only thing that tells an agent its report
-        // landed somewhere real. An 'unused' report especially: an agent that
-        // says "I ignored you and did it myself" and gets a generic thank-you
-        // learns that the field is decorative, and stops filling it.
-        const ack =
-          result === 'worked'
-            ? 'Outcome recorded: fix worked. Rank-1 confirmations are remembered for this project, so the next hit on this error starts from the confirmed fix.'
-            : result === 'unused'
-              ? 'Outcome recorded: our fix was not used.' +
-                (actualFix
-                  ? ' The fix that actually worked was logged — that is the most useful thing this tool receives, because it is a case we got wrong.'
-                  : ' If you know what actually resolved it, send it in actualFix: a wrong answer we can see is worth more than a right one we cannot.')
-              : 'Outcome recorded: fix failed. The follow-up error was logged and feeds directly into improving future answers. If you are still stuck, call debug_error again with the NEW error text.';
+        const ack = outcomeAck({ result, fixRank, newError, actualFix, finalFix });
         return {
           content: [{ type: 'text' as const, text: ack }],
           structuredContent: { recorded: true, result },
