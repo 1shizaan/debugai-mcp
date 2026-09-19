@@ -238,6 +238,17 @@ export function isInstalled(client: McpClient): boolean {
   return findInstall(client) !== null;
 }
 
+/** True when an entry of ours carries a DebugAI key in plain text, in any shape. */
+function entryCarriesKey(entry: unknown): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  const e = entry as Record<string, unknown>;
+  const envs = [e.env, (e.command && typeof e.command === 'object') ? (e.command as Record<string, unknown>).env : undefined];
+  return envs.some((env) => {
+    const v = env && typeof env === 'object' ? (env as Record<string, unknown>).DEBUGAI_API_KEY : undefined;
+    return typeof v === 'string' && v.trim().startsWith('dbg_');
+  });
+}
+
 /**
  * Every scope in this client's config where our entry carries a DebugAI key in
  * plain text.
@@ -254,17 +265,6 @@ export function isInstalled(client: McpClient): boolean {
  * indirection a client resolves at launch is left alone. Read-only, never
  * throws, an unreadable config reports nothing.
  */
-/** True when an entry of ours carries a DebugAI key in plain text, in any shape. */
-function entryCarriesKey(entry: unknown): boolean {
-  if (!entry || typeof entry !== 'object') return false;
-  const e = entry as Record<string, unknown>;
-  const envs = [e.env, (e.command && typeof e.command === 'object') ? (e.command as Record<string, unknown>).env : undefined];
-  return envs.some((env) => {
-    const v = env && typeof env === 'object' ? (env as Record<string, unknown>).DEBUGAI_API_KEY : undefined;
-    return typeof v === 'string' && v.trim().startsWith('dbg_');
-  });
-}
-
 export function plaintextKeySites(client: McpClient): InstallSite[] {
   if (!client.configPath || !existsSync(client.configPath)) return [];
   // Zed nests env inside `command`; every other shape keeps it on the entry.
@@ -287,7 +287,6 @@ export function plaintextKeySites(client: McpClient): InstallSite[] {
     return [];
   }
 }
-
 
 /**
  * The package spec our entry runs, in the scope that governs (user first), or
