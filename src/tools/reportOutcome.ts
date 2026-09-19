@@ -78,7 +78,10 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
             '"failed" = you applied one and it did not help (or made things worse). ' +
             '"unused" = you did not apply any of them and resolved it another way. ' +
             'Use "unused" rather than "failed" when nothing of ours was actually run. ' +
-            'They are different facts and reporting the wrong one buries a fix nobody tried.',
+            'They are different facts and reporting the wrong one buries a fix nobody tried. ' +
+            '"unused" is also the answer for a repeat call: if you asked about an error again ' +
+            'after already reporting a fix for it under an earlier debugLogId, report this one ' +
+            'as "unused", so one fix is not counted twice.',
           ),
         fixRank: z
           .number()

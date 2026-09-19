@@ -27,6 +27,9 @@ a fix alone. It returns things you cannot derive from the code in front of you:
   - a verification state per fix: mechanically checked and passed, checked and
     FAILED, or not checked at all (never treat "not checked" as verified)
   - machine-applicable edits (exact old/new strings) you can apply directly
+If you have a command that shows the failure (a test, a script, a curl), pass it
+as reproCommand, with expected: fix #1 is then aimed at making it pass, and each
+fix's check is that command rather than a syntax check. DebugAI never runs it.
 
 Pass the raw error or traceback. You do not need to find and paste the source
 first: this server runs on the same machine as the code, so it resolves the
@@ -42,6 +45,9 @@ wrong is worth more to it than one it got right, and "unused" is not the same
 as "failed" — reporting a fix as failed when you never ran it buries it for the
 next person. If the tool could have served you better here, say so in
 toolFeedback; that reaches the people who build it.
+If a fix worked only after you changed it, report "worked_modified" and send the
+code that held in finalFix: that code, not the suggestion, is what the next
+person who hits the error is handed.
 That is what turns a one-off answer into memory for the next person who hits
 the same error. Skipping it costs the user the feature they are paying for.
 
