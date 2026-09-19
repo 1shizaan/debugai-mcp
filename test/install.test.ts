@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseJsonc, stripJsonComments, stripTrailingCommas } from '../src/cli/jsonc.js';
-import { applyToClient, findInstall, isInstalled, plaintextKeySites } from '../src/cli/install.js';
+import { applyToClient, findInstall, installedSpec, isInstalled, plaintextKeySites } from '../src/cli/install.js';
 import { serverEntry, serversKey, type McpClient } from '../src/cli/clients.js';
 
 let dir: string;
@@ -56,8 +56,10 @@ describe('applyToClient', () => {
     const client = clientAt('nested/deep/mcp.json');
     const result = applyToClient(client);
     expect(result.action).toBe('wrote');
+    // @latest, so an old global install cannot shadow the release (field
+    // report F1/F11: a July 2.1.1 ran a whole session in September).
     expect(JSON.parse(readFileSync(client.configPath!, 'utf8'))).toEqual({
-      mcpServers: { debugai: { command: 'npx', args: ['-y', '@debugai/mcp'] } },
+      mcpServers: { debugai: { command: 'npx', args: ['-y', '@debugai/mcp@latest'] } },
     });
   });
 
@@ -170,6 +172,27 @@ describe('applyToClient', () => {
       expect(entry).not.toContain('env');
       expect(serversKey(shape)).toBeTruthy();
     }
+  });
+
+  it('runs @latest in every shape, never a bare name an old global install can shadow', () => {
+    for (const shape of ['mcpServers', 'context_servers', 'vscode_servers'] as const) {
+      expect(JSON.stringify(serverEntry(clientAt('x.json', shape)))).toContain('"@debugai/mcp@latest"');
+    }
+  });
+
+  it('says so when the entry it replaces carried a key, and does not copy the key', () => {
+    const client = clientAt('mcp.json');
+    writeFileSync(client.configPath!, JSON.stringify({
+      mcpServers: { debugai: { command: 'npx', args: ['-y', '@debugai/mcp'], env: { DEBUGAI_API_KEY: 'dbg_live_abc' } } },
+    }));
+    const dry = applyToClient(client, { dryRun: true });
+    expect(dry.warning).toContain('DEBUGAI_API_KEY');
+    const result = applyToClient(client);
+    expect(result.action).toBe('updated');
+    expect(result.warning).toContain('debugai-mcp login');
+    expect(readFileSync(client.configPath!, 'utf8')).not.toContain('dbg_live_abc');
+    // And nothing to say when there was no key.
+    expect(applyToClient(clientAt('fresh.json')).warning).toBeUndefined();
   });
 
   it('isInstalled reflects reality before and after', () => {
@@ -316,5 +339,42 @@ describe('finding a plain-text key in a client config', () => {
     for (const projects of [null, 'x', [], { a: null }, { a: { mcpServers: { debugai: { env: 7 } } } }]) {
       expect(plaintextKeySites(write('d.json', { projects }))).toEqual([]);
     }
+  });
+});
+
+describe('which package spec an installed entry runs', () => {
+  function write(file: string, body: unknown, shape: McpClient['shape'] = 'mcpServers'): McpClient {
+    const c = clientAt(file, shape);
+    writeFileSync(c.configPath!, JSON.stringify(body, null, 2));
+    return c;
+  }
+  const entry = (spec: string) => ({ debugai: { command: 'npx', args: ['-y', spec] } });
+
+  it('reads the spec from the scope that governs, user first', () => {
+    expect(installedSpec(write('a.json', { mcpServers: entry('@debugai/mcp') }))).toBe('@debugai/mcp');
+    expect(installedSpec(write('b.json', { mcpServers: entry('@debugai/mcp@latest') }))).toBe('@debugai/mcp@latest');
+    expect(installedSpec(write('c.json', { mcpServers: entry('@debugai/mcp@2.1.1') }))).toBe('@debugai/mcp@2.1.1');
+    expect(installedSpec(write('d.json', {
+      mcpServers: entry('@debugai/mcp@latest'),
+      projects: { '/x': { mcpServers: entry('@debugai/mcp') } },
+    }))).toBe('@debugai/mcp@latest');
+    expect(installedSpec(write('e.json', { projects: { '/x': { mcpServers: entry('@debugai/mcp') } } }))).toBe('@debugai/mcp');
+  });
+
+  it("reads Zed's nested command shape", () => {
+    const c = write('zed.json', { context_servers: { debugai: { source: 'custom', command: { path: 'npx', args: ['-y', '@debugai/mcp'] } } } }, 'context_servers');
+    expect(installedSpec(c)).toBe('@debugai/mcp');
+  });
+
+  it('is null for no entry, a hand-built entry, junk, or an unreadable file', () => {
+    expect(installedSpec(write('f.json', { mcpServers: { other: {} } }))).toBeNull();
+    expect(installedSpec(write('g.json', { mcpServers: { debugai: { command: 'node', args: ['/x/index.js'] } } }))).toBeNull();
+    expect(installedSpec(write('h.json', { mcpServers: { debugai: { args: 'nope' } } }))).toBeNull();
+    expect(installedSpec(clientAt('missing.json'))).toBeNull();
+    const broken = clientAt('broken.json');
+    writeFileSync(broken.configPath!, '{ nope');
+    expect(installedSpec(broken)).toBeNull();
+    // A different package whose name starts the same way is not ours.
+    expect(installedSpec(write('i.json', { mcpServers: entry('@debugai/mcp-extras') }))).toBeNull();
   });
 });

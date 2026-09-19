@@ -144,11 +144,13 @@ The two servers are the same protocol surface and are kept in step by a test tha
   "mcpServers": {
     "debugai": {
       "command": "npx",
-      "args": ["-y", "@debugai/mcp"]
+      "args": ["-y", "@debugai/mcp@latest"]
     }
   }
 }
 ```
+
+Keep the `@latest`. Without a version, npx runs the first copy it finds, and an old global install wins over the newest release: one agent ran a whole session on a July 2.1.1 that sends no project, so project memory was off for every call. `debugai-mcp doctor` warns when an entry has no version.
 
 Where it goes:
 
@@ -161,7 +163,7 @@ Where it goes:
 
 | Client | File |
 |--------|------|
-| Claude Code | `~/.claude.json`, top-level `mcpServers` (or `claude mcp add --scope user debugai -- npx -y @debugai/mcp`) |
+| Claude Code | `~/.claude.json`, top-level `mcpServers` (or `claude mcp add --scope user debugai -- npx -y @debugai/mcp@latest`) |
 | Claude Desktop | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows `%APPDATA%\Claude\claude_desktop_config.json` |
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
@@ -175,7 +177,7 @@ Zed uses a different key and a nested command:
   "context_servers": {
     "debugai": {
       "source": "custom",
-      "command": { "path": "npx", "args": ["-y", "@debugai/mcp"] }
+      "command": { "path": "npx", "args": ["-y", "@debugai/mcp@latest"] }
     }
   }
 }

@@ -30,7 +30,7 @@ import {
   knownClients,
   type McpClient,
 } from './clients.js';
-import { applyToClient, findInstall, isInstalled, plaintextKeySites, type InstallResult } from './install.js';
+import { applyToClient, findInstall, installedSpec, isInstalled, plaintextKeySites, type InstallResult } from './install.js';
 import { FAIL, INFO, OK, WARN, bold, codeBox, dim, heading, openBrowser, say, yellow } from './ui.js';
 
 // ── shared helpers ───────────────────────────────────────────────────────────
@@ -374,6 +374,16 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
       say(`      ${dim(`debugai-mcp install --client=${c.id}`)}`);
     } else {
       say(`  ${WARN()} ${yellow(`${c.label} — installed but DebugAI is not in its config`)}\n      ${dim(`fix: debugai-mcp install --client=${c.id}`)}`);
+    }
+    // Bare `@debugai/mcp` runs whatever copy npx finds first, and a global
+    // install wins: the field report's whole session ran on a July 2.1.1.
+    const spec = site ? installedSpec(c) : null;
+    if (spec === '@debugai/mcp') {
+      say(`  ${WARN()} ${yellow(`${c.label} — runs "@debugai/mcp" without a version`)}`);
+      say(`      ${dim('npx then runs the first copy it finds, and an old global install wins over the newest release.')}`);
+      say(`      ${dim(`fix: debugai-mcp install --client=${c.id}   (writes @debugai/mcp@latest)`)}`);
+    } else if (spec && spec !== '@debugai/mcp@latest') {
+      say(`  ${INFO()} ${c.label} — pinned to ${spec}; newer releases will not reach it until you change that.`);
     }
     // A warning, not a failure: it works. It is also a key in a file that gets
     // committed and pasted, and it outranks the stored one after a rotation.

@@ -143,16 +143,26 @@ export function detectedClients(env: NodeJS.ProcessEnv = process.env): McpClient
 }
 
 /**
- * The server entry itself. `npx -y` is deliberate: it self-updates on each
- * launch and needs no global install, which is the only variant that works
- * identically on a laptop, a devcontainer, and CI.
+ * The server entry itself. `npx -y` is deliberate: it needs no global install,
+ * which is the only variant that works identically on a laptop, a devcontainer,
+ * and CI.
+ *
+ * `@latest` is deliberate too, and it is what makes the first sentence true.
+ * Without a version, npx runs whatever copy it finds first, and a global
+ * install wins: on 2026-09-16 an agent ran a whole session on a global 2.1.1
+ * from July while 2.5.1 was published, and 2.1.1 sends no project, so memory
+ * was off for every call (field report F1, F11). Reproduced with a scratch
+ * prefix: `npx -y @debugai/mcp --version` printed 2.1.1, and the same command
+ * with `@latest` printed 2.5.1.
  *
  * No `env` block, ever — the key lives in ~/.debugai/config.json (see
  * config.ts). Client configs get committed to repos; keys should not.
  */
+export const SERVER_PACKAGE_SPEC = '@debugai/mcp@latest';
+
 export function serverEntry(client: McpClient): Record<string, unknown> {
   const command = 'npx';
-  const args = ['-y', '@debugai/mcp'];
+  const args = ['-y', SERVER_PACKAGE_SPEC];
 
   if (client.shape === 'context_servers') {
     return { source: 'custom', command: { path: command, args } };

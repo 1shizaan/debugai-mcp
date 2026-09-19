@@ -82,6 +82,8 @@ export interface DebugResponse {
   memory_hit?: boolean;
   /** false when the API received no project and so could not use memory. */
   memory_enabled?: boolean;
+  /** Which engine build wrote the answer: prompt version, plus the deploy's short commit when known. */
+  engine_version?: string;
   memory_disabled_reason?: string;
   memory_times_seen?: number;
   memory_fix_confirmed?: boolean;

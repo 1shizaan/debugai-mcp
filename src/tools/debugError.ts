@@ -264,6 +264,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           badges.push(`Memory: off${result.memory_disabled_reason ? ` (${result.memory_disabled_reason})` : ''}`);
         }
         badges.push(`DebugAI MCP ${config.version}`);
+        if (result.engine_version) { badges.push(`Engine ${result.engine_version}`); }
         if (badges.length) {
           sections.push(`\n---\n_${badges.join(' · ')}_`);
         }
@@ -303,6 +304,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             project:              { root, source: explicit?.source ?? 'cwd' },
             memory_enabled:       result.memory_enabled ?? null,
             mcp_version:          config.version,
+            engine_version:       result.engine_version ?? null,
           },
         };
       } catch (err) {

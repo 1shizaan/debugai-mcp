@@ -484,3 +484,16 @@ describe('reproCommand and expected', () => {
     expect(out).not.toContain('Check after applying: run');
   });
 });
+
+describe('which builds answered (field report 2026-09-16, R1)', () => {
+  it('names the engine build beside the MCP version, in prose and in structuredContent', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ root_cause: 'r', fixes: [], engine_version: 'debug-v7+4ba459f' }), { status: 200 },
+    )));
+    const { client } = await connectedClient();
+    const result = await client.callTool({ name: 'debug_error', arguments: { errorText: 'TypeError: x' } }) as CallToolResult;
+    const text = result.content[0].type === 'text' ? result.content[0].text : '';
+    expect(text).toContain('DebugAI MCP 1.0.0-test · Engine debug-v7+4ba459f');
+    expect(result.structuredContent).toMatchObject({ engine_version: 'debug-v7+4ba459f' });
+  });
+});
