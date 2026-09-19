@@ -260,6 +260,35 @@ describe('formatSnippet', () => {
     ]);
     expect(out).toMatch(/truncated/i);
   });
+
+  // 2026-09-07: "Line 4 calls setWordWrap(True)" about a call on line 539. The
+  // header said "lines around 539" and never where the window began, so the
+  // engine numbered the whole snippet from 1 - and told the model those were
+  // the file's own numbers.
+  it('states where a window starts, so the engine can number it with real lines', () => {
+    const out = formatSnippet([
+      { label: 'app.py', line: 539, text: 'a\nb\nc', windowed: true, start: 499 },
+    ]);
+    expect(out).toContain('--- app.py:539 (lines 499-501; file truncated for context budget) ---');
+  });
+
+  it('carries the real range end to end, from a file on disk', () => {
+    write('src/big.py', numbered(1062));
+    const ctx = resolveSourceContext({
+      errorText: `Traceback (most recent call last):\n  File "${join(root, 'src/big.py')}", line 539, in <module>\nAttributeError: x`,
+      root,
+    });
+    expect(ctx).not.toBeNull();
+    const first = ctx!.snippet.split('\n')[0];
+    expect(first).toMatch(/\(lines 499-579; file truncated for context budget\)/);
+    // And the first line of the window really is file line 499.
+    expect(ctx!.snippet.split('\n')[1]).toBe(numbered(1062).split('\n')[498]);
+  });
+
+  it('keeps the old wording only when the start is unknown', () => {
+    const out = formatSnippet([{ label: 'big.ts', line: 900, text: 'x', windowed: true }]);
+    expect(out).toContain('(lines around 900;');
+  });
 });
 
 // ── Windows paths with spaces ───────────────────────────────────────────────

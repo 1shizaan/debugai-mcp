@@ -74,6 +74,14 @@ export interface ResolvedFile {
   text: string;
   /** True when only a window around `line` was sent, not the whole file. */
   windowed: boolean;
+  /**
+   * The file line `text` starts at, 1-based. Sent in the header so the engine
+   * can number every line with its real position. Without it the engine
+   * numbered the whole snippet from 1 and told the model those were the file's
+   * numbers, so an answer said "Line 4 calls setWordWrap" about line 539
+   * (2026-09-07). Optional only so a caller building one by hand still compiles.
+   */
+  start?: number;
 }
 
 // ── Frame extraction ─────────────────────────────────────────────────────────
@@ -225,17 +233,20 @@ function candidatesFor(frame: Frame, root: string, cwd: string): string[] {
   return out;
 }
 
-function windowAround(text: string, line: number | null): { text: string; windowed: boolean } {
+function windowAround(
+  text: string,
+  line: number | null,
+): { text: string; windowed: boolean; start: number } {
   if (line === null) {
     const lines = text.split('\n');
-    if (lines.length <= WINDOW * 2 + 1) return { text, windowed: false };
-    return { text: lines.slice(0, WINDOW * 2 + 1).join('\n'), windowed: true };
+    if (lines.length <= WINDOW * 2 + 1) return { text, windowed: false, start: 1 };
+    return { text: lines.slice(0, WINDOW * 2 + 1).join('\n'), windowed: true, start: 1 };
   }
   const lines = text.split('\n');
-  if (lines.length <= WINDOW * 2 + 1) return { text, windowed: false };
+  if (lines.length <= WINDOW * 2 + 1) return { text, windowed: false, start: 1 };
   const start = Math.max(0, line - 1 - WINDOW);
   const end = Math.min(lines.length, line + WINDOW);
-  return { text: lines.slice(start, end).join('\n'), windowed: true };
+  return { text: lines.slice(start, end).join('\n'), windowed: true, start: start + 1 };
 }
 
 function readOne(frame: Frame, root: string, cwd: string): ResolvedFile | null {
@@ -251,7 +262,13 @@ function readOne(frame: Frame, root: string, cwd: string): ResolvedFile | null {
       const win = windowAround(raw, frame.line);
       const real = realpathSync(candidate);
       const rel = relative(realpathSync(root), real);
-      return { label: rel || basename(real), line: frame.line, text: win.text, windowed: win.windowed };
+      return {
+        label: rel || basename(real),
+        line: frame.line,
+        text: win.text,
+        windowed: win.windowed,
+        start: win.start,
+      };
     } catch {
       continue; // unreadable, binary, permissions — try the next candidate
     }
@@ -317,9 +334,14 @@ export function formatSnippet(files: ResolvedFile[]): string {
   return files
     .map((f) => {
       const where = f.line !== null ? `${f.label}:${f.line}` : f.label;
-      const note = f.windowed
-        ? ` (lines around ${f.line ?? 1}; file truncated for context budget)`
-        : '';
+      // The window's real range, which the engine numbers every line from.
+      // apps/engine/app/services/prompt_assembly.py parses exactly this shape;
+      // tests/test_snippet_section_numbers.py reads this file to pin it.
+      const note = !f.windowed
+        ? ''
+        : typeof f.start === 'number'
+          ? ` (lines ${f.start}-${f.start + f.text.split('\n').length - 1}; file truncated for context budget)`
+          : ` (lines around ${f.line ?? 1}; file truncated for context budget)`;
       return `--- ${where}${note} ---\n${f.text}`;
     })
     .join('\n\n');
