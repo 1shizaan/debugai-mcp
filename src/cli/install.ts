@@ -225,3 +225,49 @@ export function findInstall(client: McpClient): InstallSite | null {
 export function isInstalled(client: McpClient): boolean {
   return findInstall(client) !== null;
 }
+
+/**
+ * Every scope in this client's config where our entry carries a DebugAI key in
+ * plain text.
+ *
+ * `install` never writes one (see serverEntry), but hand-written entries and
+ * older setup guides did, and on 2026-09-16 an agent found one in
+ * ~/.claude.json while device-link sign-in sat unused (field report F13, R15).
+ * Two costs, not one: a client config is the kind of file that gets committed
+ * or pasted into a bug report, and a key in `env` outranks the one `login`
+ * stores, so after a rotation that stale copy keeps failing authentication
+ * while `login` reports success.
+ *
+ * Only a value that IS a key counts (`dbg_...`), so a `${input:...}` or other
+ * indirection a client resolves at launch is left alone. Read-only, never
+ * throws, an unreadable config reports nothing.
+ */
+export function plaintextKeySites(client: McpClient): InstallSite[] {
+  if (!client.configPath || !existsSync(client.configPath)) return [];
+  const isKey = (v: unknown): boolean => typeof v === 'string' && v.trim().startsWith('dbg_');
+  const keyIn = (servers: unknown): boolean => {
+    if (!servers || typeof servers !== 'object') return false;
+    const entry = (servers as Record<string, unknown>)[SERVER_NAME];
+    if (!entry || typeof entry !== 'object') return false;
+    const e = entry as Record<string, unknown>;
+    // Zed nests env inside `command`; every other shape keeps it on the entry.
+    const envs = [e.env, (e.command && typeof e.command === 'object') ? (e.command as Record<string, unknown>).env : undefined];
+    return envs.some((env) => env && typeof env === 'object' && isKey((env as Record<string, unknown>).DEBUGAI_API_KEY));
+  };
+  try {
+    const root = parseJsonc(readFileSync(client.configPath, 'utf8')).value as Record<string, unknown> | undefined;
+    const sites: InstallSite[] = [];
+    if (keyIn(root?.[serversKey(client.shape)])) sites.push({ scope: 'user' });
+    const projects = root?.projects;
+    if (projects && typeof projects === 'object') {
+      for (const [dir, cfg] of Object.entries(projects as Record<string, unknown>)) {
+        if (cfg && typeof cfg === 'object' && keyIn((cfg as Record<string, unknown>).mcpServers)) {
+          sites.push({ scope: 'project', projectPath: dir });
+        }
+      }
+    }
+    return sites;
+  } catch {
+    return [];
+  }
+}

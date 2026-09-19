@@ -30,7 +30,7 @@ import {
   knownClients,
   type McpClient,
 } from './clients.js';
-import { applyToClient, findInstall, isInstalled, type InstallResult } from './install.js';
+import { applyToClient, findInstall, isInstalled, plaintextKeySites, type InstallResult } from './install.js';
 import { FAIL, INFO, OK, WARN, bold, codeBox, dim, heading, openBrowser, say, yellow } from './ui.js';
 
 // ── shared helpers ───────────────────────────────────────────────────────────
@@ -374,6 +374,15 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
       say(`      ${dim(`debugai-mcp install --client=${c.id}`)}`);
     } else {
       say(`  ${WARN()} ${yellow(`${c.label} — installed but DebugAI is not in its config`)}\n      ${dim(`fix: debugai-mcp install --client=${c.id}`)}`);
+    }
+    // A warning, not a failure: it works. It is also a key in a file that gets
+    // committed and pasted, and it outranks the stored one after a rotation.
+    for (const site of plaintextKeySites(c)) {
+      const where = site.scope === 'project' ? ` (entry for ${site.projectPath})` : '';
+      say(`  ${WARN()} ${yellow(`${c.label} — an API key is written in plain text in its config`)}`);
+      say(`      ${dim(`${c.configPath ?? ''}${where}`)}`);
+      say(`      ${dim('It outranks the key `login` stores, so a rotated key keeps failing from there.')}`);
+      say(`      ${dim('fix: debugai-mcp login, then delete the "env" block from that debugai entry')}`);
     }
   }
 

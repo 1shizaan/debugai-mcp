@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseJsonc, stripJsonComments, stripTrailingCommas } from '../src/cli/jsonc.js';
-import { applyToClient, findInstall, isInstalled } from '../src/cli/install.js';
+import { applyToClient, findInstall, isInstalled, plaintextKeySites } from '../src/cli/install.js';
 import { serverEntry, serversKey, type McpClient } from '../src/cli/clients.js';
 
 let dir: string;
@@ -263,5 +263,58 @@ describe('finding an install in either scope', () => {
     expect(isInstalled(writeClaude({ mcpServers: ENTRY }))).toBe(true);
     expect(isInstalled(writeClaude({ projects: { '/x': { mcpServers: ENTRY } } }))).toBe(true);
     expect(isInstalled(writeClaude({ mcpServers: {} }))).toBe(false);
+  });
+});
+
+// ── A key written into a client config ──────────────────────────────────────
+// Field report 2026-09-16, F13: ~/.claude.json held DEBUGAI_API_KEY for one
+// project while device-link sign-in sat unused. `install` never writes one;
+// doctor now says where a hand-written one is.
+describe('finding a plain-text key in a client config', () => {
+  function write(file: string, body: unknown, shape: McpClient['shape'] = 'mcpServers'): McpClient {
+    const c = clientAt(file, shape);
+    writeFileSync(c.configPath!, JSON.stringify(body, null, 2));
+    return c;
+  }
+  const KEYED = { debugai: { command: 'npx', args: ['-y', '@debugai/mcp'], env: { DEBUGAI_API_KEY: 'dbg_live_abc123' } } };
+
+  it('finds one in the project scope, named by directory, as it sat on 2026-09-16', () => {
+    const c = write('claude.json', {
+      mcpServers: { debugai: { command: 'npx', args: ['-y', '@debugai/mcp'] } },
+      projects: { '/home/me/debugai-mvp': { mcpServers: KEYED } },
+    });
+    expect(plaintextKeySites(c)).toEqual([{ scope: 'project', projectPath: '/home/me/debugai-mvp' }]);
+  });
+
+  it('finds one in the user scope, and in Zed\'s nested command shape', () => {
+    expect(plaintextKeySites(write('a.json', { mcpServers: KEYED }))).toEqual([{ scope: 'user' }]);
+    const zed = write('zed.json', {
+      context_servers: { debugai: { source: 'custom', command: { path: 'npx', args: [], env: { DEBUGAI_API_KEY: 'dbg_x' } } } },
+    }, 'context_servers');
+    expect(plaintextKeySites(zed)).toEqual([{ scope: 'user' }]);
+  });
+
+  it('leaves an indirection alone: only a value that is a key counts', () => {
+    for (const value of ['${input:debugai-key}', '${env:DEBUGAI_API_KEY}', '', '   ']) {
+      const c = write('b.json', { mcpServers: { debugai: { command: 'npx', env: { DEBUGAI_API_KEY: value } } } });
+      expect(plaintextKeySites(c), value).toEqual([]);
+    }
+  });
+
+  it('ignores other servers\' keys and what install itself writes', () => {
+    const c = write('c.json', {
+      mcpServers: { other: { env: { DEBUGAI_API_KEY: 'dbg_not_ours' } }, debugai: serverEntry(clientAt('c.json')) },
+    });
+    expect(plaintextKeySites(c)).toEqual([]);
+  });
+
+  it('never throws on a config it cannot read', () => {
+    const c = clientAt('broken.json');
+    writeFileSync(c.configPath!, '{ nope');
+    expect(plaintextKeySites(c)).toEqual([]);
+    expect(plaintextKeySites(clientAt('missing.json'))).toEqual([]);
+    for (const projects of [null, 'x', [], { a: null }, { a: { mcpServers: { debugai: { env: 7 } } } }]) {
+      expect(plaintextKeySites(write('d.json', { projects }))).toEqual([]);
+    }
   });
 });
