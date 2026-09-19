@@ -195,6 +195,15 @@ describe('debug_error tool over MCP', () => {
     expect(fixes[2].verified).toBe(false);
   });
 
+  it('says when a fix repeats a change this project reported as failed', () => {
+    const text = formatFix({
+      rank: 1, title: 'Disable thinking', description: 'd', code: 'x', confidence: 60,
+      previously_failed: { at: '2026-09-16 21:05', rank: 1 },
+    } as any, 1);
+    expect(text).toContain('reported as FAILED in this project on 2026-09-16 21:05');
+    expect(formatFix({ rank: 1, title: 't', description: 'd', confidence: 90 } as any, 1)).not.toContain('FAILED');
+  });
+
   it('still shows the diff for a fix that has no code block, because then it is the only copy', () => {
     const out = formatFix({ title: 't', description: 'd', confidence: 50, unified_diff: '--- a/x\n+++ b/x\n' } as any, 1);
     expect(out).toContain('```diff');

@@ -31,6 +31,15 @@ export function formatFix(fix: DebugFix, index: number): string {
     formatVerification(fix),
     fix.description,
   ];
+  // Field report R8: advice this project reported as failed is not handed
+  // back at full confidence. The engine caps it; this says why.
+  if (fix.previously_failed) {
+    lines.push(
+      `_This change was reported as FAILED in this project on ${fix.previously_failed.at} ` +
+      `(fix #${fix.previously_failed.rank} then), so its confidence is capped. ` +
+      'Apply it only if you can say what is different now._',
+    );
+  }
   if (fix.code) {
     lines.push('```', fix.code, '```');
   }

@@ -60,6 +60,8 @@ export interface DebugFix {
   verify_expect?: string;
   /** The syntax check verify_with held before a reproduction replaced it. */
   syntax_check?: string;
+  /** Set when this fix repeats a change this project reported as failed; confidence is capped. */
+  previously_failed?: { at: string; rank: number };
 }
 
 export interface DebugResponse {
