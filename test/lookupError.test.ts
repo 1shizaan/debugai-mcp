@@ -48,6 +48,25 @@ describe('lookup_error tool over MCP', () => {
     expect(result.structuredContent).toMatchObject({ memory_hit: true, mcp_version: '2.6.0-test' });
   });
 
+  it('sends a long error cut exactly as debug_error cuts it, so both read one memory row', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      memory_enabled: true, memory_hit: false, refuted: [],
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { fitErrorText } = await import('../src/fitErrorText.js');
+    const long = 'Traceback (most recent call last):\n' +
+      Array.from({ length: 150 }, (_, i) => `  File "/app/m${i}.py", line ${i + 1}, in f${i}`).join('\n') +
+      "\nKeyError: 'user_id'";
+
+    const client = await connectedClient();
+    await client.callTool({ name: 'lookup_error', arguments: { errorText: long } });
+
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body).error_message;
+    expect(sent).toBe(fitErrorText(long).text);
+    expect(sent.length).toBeLessThanOrEqual(3000);
+    expect(sent.endsWith("KeyError: 'user_id'")).toBe(true);
+  });
+
   it('an API without the route yet is not an error: the next step is debug_error', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
     const client = await connectedClient();

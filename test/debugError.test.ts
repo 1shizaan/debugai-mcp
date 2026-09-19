@@ -93,6 +93,35 @@ describe('debug_error tool over MCP', () => {
     expect(body.error_message).toBe('boom');
   });
 
+  // The API refuses an error_message over 3,000 characters with a 400. A long
+  // pytest run or build log is the normal case for an agent, so the server
+  // cuts it (both ends kept) instead of relaying the refusal, and says so.
+  it('cuts an error longer than the API accepts, keeps both ends, and says it did', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ root_cause: 'x', fixes: [] }), { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const frames = Array.from({ length: 200 }, (_, i) => `    at step${i} (/app/src/s${i}.js:${i + 1}:3)`).join('\n');
+    const long = "TypeError: Cannot read properties of undefined (reading 'id')\n" + frames;
+    expect(long.length).toBeGreaterThan(3000);
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({ name: 'debug_error', arguments: { errorText: long } }) as CallToolResult;
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.error_message.length).toBeLessThanOrEqual(3000);
+    expect(body.error_message.startsWith("TypeError: Cannot read properties of undefined (reading 'id')")).toBe(true);
+    expect(body.error_message.endsWith(frames.split('\n').pop()!)).toBe(true);
+    expect(textOf(result)).toContain('Error text cut to 3,000 characters, start and end kept');
+    expect((result.structuredContent as any).error_text_cut).toBeGreaterThan(0);
+
+    // And an error that fits is sent exactly as given, with no badge.
+    fetchMock.mockClear();
+    const short = await client.callTool({ name: 'debug_error', arguments: { errorText: 'boom' } }) as CallToolResult;
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).error_message).toBe('boom');
+    expect(textOf(short)).not.toContain('Error text cut');
+  });
+
   it('maps a 402 quota response to an isError tool result instead of a protocol error', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ tier: 'free', limit: 10 }), { status: 402 },

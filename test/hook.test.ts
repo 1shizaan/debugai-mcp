@@ -11,7 +11,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { HOOK_CONTEXT_MAX, HOOK_MAX_CHARS, cmdHook, failureText, hookOutput } from '../src/cli/hook.js';
+import { HOOK_CONTEXT_MAX, cmdHook, failureText, hookOutput } from '../src/cli/hook.js';
+import { API_ERROR_MAX_CHARS, fitErrorText } from '../src/fitErrorText.js';
 
 // The example the hooks reference gives for a failed `npm test`.
 const DOCS_EXAMPLE = {
@@ -49,12 +50,17 @@ describe('failureText: which failures are worth a lookup', () => {
     for (const junk of [null, 'x', 42, [], {}]) expect(failureText(junk)).toBeNull();
   });
 
-  it('drops Claude Code\'s own truncation marker and keeps the tail of long output', () => {
+  it('drops Claude Code\'s own truncation marker and cuts long output the way debug_error does', () => {
     const long = 'noise line\n'.repeat(1000) + "TypeError: Cannot read properties of undefined (reading 'id')";
     const text = failureText({ ...DOCS_EXAMPLE, error: `Exit code 1\nstart\n... [48213 characters truncated] ...\n${long}` })!;
     expect(text).not.toContain('characters truncated');
-    expect(text.length).toBe(HOOK_MAX_CHARS);
+    expect(text.length).toBeLessThanOrEqual(API_ERROR_MAX_CHARS);
+    // Both ends: a JavaScript error prints first, a Python one last.
+    expect(text.startsWith('start\n')).toBe(true);
     expect(text.endsWith("(reading 'id')")).toBe(true);
+    // Byte for byte what the tools send for the same output, so one memory row.
+    // (The marker had a line of its own, so it leaves a blank one behind.)
+    expect(text).toBe(fitErrorText(`start\n\n\n${long}`).text);
   });
 
   // The shape Claude Code actually writes, taken from a real transcript: the

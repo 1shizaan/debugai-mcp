@@ -31,10 +31,9 @@ import { callLookupBackend } from '../backend.js';
 import { resolveSettings } from '../config.js';
 import { DEFAULT_API_BASE } from '../constants.js';
 import { explicitProject } from '../explicitProject.js';
+import { fitErrorText } from '../fitErrorText.js';
 import { renderLookup } from '../lookupAnswer.js';
 
-/** The API's own cap on error text; the tail of long output is where errors are. */
-export const HOOK_MAX_CHARS = 3000;
 const MIN_OUTPUT_CHARS = 12;
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 // Text Claude Code writes into `error` itself, which is not the command's
@@ -74,7 +73,9 @@ export function failureText(input: unknown): string | null {
     .join('\n')
     .trim();
   if (output.length < MIN_OUTPUT_CHARS) return null;
-  return output.length > HOOK_MAX_CHARS ? output.slice(-HOOK_MAX_CHARS) : output;
+  // The cut debug_error and lookup_error make, both ends kept: the same
+  // failure sent by the agent later must name the same memory row.
+  return fitErrorText(output).text;
 }
 
 /** What to print on stdout, or null to print nothing. Never throws. */

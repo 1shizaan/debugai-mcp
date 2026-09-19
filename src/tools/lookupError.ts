@@ -6,6 +6,7 @@ import { callLookupBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
 import { explicitProject } from '../explicitProject.js';
 import { renderLookup } from '../lookupAnswer.js';
+import { fitErrorText } from '../fitErrorText.js';
 import { getProjectId, getProjectRoot } from '../project.js';
 import { resolveAuth } from './authGate.js';
 
@@ -69,7 +70,9 @@ export function registerLookupError(server: McpServer, config: BackendConfig): v
 
       try {
         const result = await callLookupBackend(
-          { error_message: errorText, project_id: projectId },
+          // The same cut debug_error makes, so a lookup and a debug of one
+          // long failure send one text and read one memory row.
+          { error_message: fitErrorText(errorText).text, project_id: projectId },
           gate.config,
         );
         const project = basename(root) || root;

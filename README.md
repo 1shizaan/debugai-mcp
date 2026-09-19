@@ -82,7 +82,7 @@ Has this project seen the error before, and what held? (2.6)
 | `projectRoot` | no | Absolute path of the repository the error came from, when the agent was started somewhere else. |
 | `filePath` | no | An absolute path inside that repository. Its git root names the project. |
 
-It reads two indexed rows and calls no model, so it is free: it does not count against the debug limit (a separate, generous rate limit keeps it honest). It returns how many times the error was seen in this project and when, the stored fix and what state it is in, and fixes this project recently reported as failed:
+It is two small database reads and no model call, so it is free: it does not count against the debug limit (a separate, generous rate limit keeps it honest). It returns how many times the error was seen in this project and when, the stored fix and what state it is in, and fixes this project recently reported as failed:
 
 - **confirmed**: somebody applied it and said it worked. The answer says whether a live session watched the error stop or it was only accepted, because those are different amounts of evidence.
 - **unproven**: it was applied and the error has come back once since. Check it against the code as it is now.
@@ -105,6 +105,8 @@ Give it an error, get an analysis.
 | `expected` | no | What `reproCommand` should print or do once the bug is fixed. (2.6) |
 
 Returns the root cause, up to 3 fixes ranked by confidence, the detected framework, and whether the answer came from cache. Each fix also carries, where derivable: `edits` (exact old/new strings your agent's edit tool can apply directly), `unified_diff`, and `verify_with`, the check to run after applying. With `reproCommand` that check is your command and the result you said to expect; without it, a syntax-level check. It never writes to your files and never runs your reproduction. Applying a fix is your agent's call, and yours.
+
+An error longer than the 3,000 characters the API accepts is cut rather than refused: the start (where JavaScript, Java and .NET print the error) and the end (where Python prints it) are kept, the middle goes, and the answer says so. The same cut is made by `lookup_error` and the hook, so all three read one memory row for one failure. (2.6)
 
 A footer on every answer names the project it was filed under, says when memory was off for it and why, and gives the version of this server and the engine build that answered. A session running on an old copy can see that it is, and an answer can be traced to the code that produced it. (2.6)
 
@@ -198,7 +200,7 @@ Then `/hooks` inside Claude Code shows it loaded.
 
 - **Cost per failed command.** `npx` resolves `@latest` each time, which measured 1.5 to 1.9 seconds warm and 6.7 seconds cold on one Linux machine, before the lookup itself. For about a third of a second instead, install it once with `npm i -g @debugai/mcp@latest` and use `"command": "debugai-mcp hook"`. A global install does not update itself: rerun that command when a new version ships.
 - **The timeout.** Claude Code's default for a command hook is 600 seconds. The hook bounds itself (5 seconds to read its input, 8 for the lookup), and `20` makes sure a stuck network can never hold the agent longer than that.
-- **What leaves your machine.** The last 3,000 characters of the failed command's output and the project id, which is a hash of the repository path. Credentials are redacted before the lookup reads anything, and nothing is stored. The command line itself is not sent.
+- **What leaves your machine.** The failed command's output, up to 3,000 characters (its start and end when it is longer), and the project id, which is a hash of the repository path. Credentials are redacted before the lookup reads anything, and nothing is stored. The command line itself is not sent.
 - **Which project.** The git repository the command ran in, resolved the same way `debug_error` resolves `projectRoot`, so the hook and a debug of the same failure read one memory. Outside any repository, and in your home directory, it stays silent.
 
 ## VS Code
@@ -318,6 +320,7 @@ Recent server-side work, all of it live for agents already:
 - **Every answer names this server's version and the engine build.** The report's agent spent a session on a July 2.1.1 without knowing, because nothing it received carried a version. The installer writes `@debugai/mcp@latest`, `doctor` flags an entry with no version and a key left in plain text in a client config, and an older server is told once a day that a newer one exists.
 - A code window from a large file is numbered with its real line numbers, so an answer about line 539 does not come back as line 4.
 - Each fix's change is shown once in prose. The diff stays whole in the structured result.
+- An error longer than 3,000 characters is cut to fit, start and end kept, instead of refused with a 400 the agent had to work around.
 
 **2.5.1** - `language` accepts 24 languages instead of 6. It listed javascript,
 typescript, python, go, rust and auto, so an agent naming anything else got its

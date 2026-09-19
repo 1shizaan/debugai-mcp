@@ -7,6 +7,7 @@ import { resolveAuth } from './authGate.js';
 import { basename } from 'node:path';
 import { getProjectId, getProjectRoot } from '../project.js';
 import { explicitProject } from '../explicitProject.js';
+import { API_ERROR_MAX_CHARS, fitErrorText } from '../fitErrorText.js';
 import { memorySection } from '../memorySection.js';
 import { resolveSourceContext } from '../sourceContext.js';
 import { gatherWorkspaceFacts } from '../gatherWorkspaceFacts.js';
@@ -203,11 +204,15 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       // Bounded and total - see ../gatherWorkspaceFacts.ts - so the worst case
       // is null and a prompt identical to today's.
       const workspaceFacts = gatherWorkspaceFacts(root);
+      const fitted = fitErrorText(errorText);
 
       try {
         const result = await callDebugBackend(
           {
-            error_message:  errorText,
+            // Cut to what the API accepts, both ends kept, rather than sent
+            // whole and refused with a 400. Source resolution above read the
+            // full text, so no path it names is lost to the cut.
+            error_message:  fitted.text,
             language:       language !== 'auto' ? language : undefined,
             code_snippet:   snippet,
             file_path:      effectiveFilePath,
@@ -263,6 +268,9 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         if (result.memory_enabled === false) {
           badges.push(`Memory: off${result.memory_disabled_reason ? ` (${result.memory_disabled_reason})` : ''}`);
         }
+        if (fitted.cut > 0) {
+          badges.push(`Error text cut to ${API_ERROR_MAX_CHARS.toLocaleString('en-US')} characters, start and end kept`);
+        }
         badges.push(`DebugAI MCP ${config.version}`);
         if (result.engine_version) { badges.push(`Engine ${result.engine_version}`); }
         if (badges.length) {
@@ -304,6 +312,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             project:              { root, source: explicit?.source ?? 'cwd' },
             memory_enabled:       result.memory_enabled ?? null,
             mcp_version:          config.version,
+            error_text_cut:       fitted.cut,
             engine_version:       result.engine_version ?? null,
           },
         };
