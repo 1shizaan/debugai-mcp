@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BackendConfig } from './backend.js';
 import { registerDebugError } from './tools/debugError.js';
 import { registerReportOutcome } from './tools/reportOutcome.js';
+import { registerLookupError } from './tools/lookupError.js';
 
 // `instructions` is handed to the agent's context at connect time — the one
 // channel the protocol gives a server to say what it is FOR. Without it,
@@ -11,9 +12,16 @@ import { registerReportOutcome } from './tools/reportOutcome.js';
 // human confirmed, a mechanical check), not with "AI-powered analysis".
 const INSTRUCTIONS = `DebugAI is this project's debugging memory and fix verifier.
 
-When a runtime error, exception, stack trace, or failing test output appears,
-call debug_error before reasoning your way to a fix alone. It returns things
-you cannot derive from the code in front of you:
+When anything fails, call lookup_error first. It answers from this project's
+memory in under a second, makes no model call and costs nothing against the
+debug limit: whether this error was seen here before, the fix that was
+confirmed for it, and fixes recently reported as failed. With a confirmed fix,
+apply it and re-run what failed. Trivial errors included: a lookup that finds
+nothing still costs nothing.
+
+When a runtime error, exception, stack trace, or failing test output appears
+and memory has no confirmed fix, call debug_error before reasoning your way to
+a fix alone. It returns things you cannot derive from the code in front of you:
   - whether this exact error has been seen before in this project, and how often
   - the fix a human already confirmed worked for it, if there is one
   - a verification state per fix: mechanically checked and passed, checked and
@@ -53,6 +61,7 @@ export function createServer(config: BackendConfig): McpServer {
 
   registerDebugError(server, config);
   registerReportOutcome(server, config);
+  registerLookupError(server, config);
 
   return server;
 }

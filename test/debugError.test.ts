@@ -31,7 +31,7 @@ describe('debug_error tool over MCP', () => {
     const { client } = await connectedClient();
     const { tools } = await client.listTools();
 
-    expect(tools.map(t => t.name).sort()).toEqual(['debug_error', 'report_outcome']);
+    expect(tools.map(t => t.name).sort()).toEqual(['debug_error', 'lookup_error', 'report_outcome']);
     const tool = tools.find(t => t.name === 'debug_error')!;
     expect(tool.annotations?.readOnlyHint).toBe(true);
     expect(tool.inputSchema.required).toContain('errorText');

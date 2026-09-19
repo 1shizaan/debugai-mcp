@@ -1,4 +1,5 @@
 import type { AuthProvider } from './auth.js';
+import type { LookupResult } from './lookupAnswer.js';
 
 export interface DebugRequest {
   error_message: string;
@@ -197,4 +198,25 @@ export async function callOutcomeBackend(
   config: BackendConfig,
 ): Promise<OutcomeResponse> {
   return postJson<OutcomeResponse>('/user/debug-feedback', req, config, OUTCOME_TIMEOUT_MS);
+}
+
+export interface LookupRequest {
+  error_message: string;
+  project_id?: string;
+}
+
+export interface LookupResponse extends LookupResult {
+  error_signature?: string;
+  error_class?: string;
+}
+
+// Two indexed reads on the server. A lookup that has not answered in this long
+// is not going to, and the agent's next step (debug_error) does not need it.
+export const LOOKUP_TIMEOUT_MS = 8_000;
+
+export async function callLookupBackend(
+  req: LookupRequest,
+  config: BackendConfig,
+): Promise<LookupResponse> {
+  return postJson<LookupResponse>('/memory/lookup', req, config, LOOKUP_TIMEOUT_MS);
 }
