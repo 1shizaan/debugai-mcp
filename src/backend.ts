@@ -18,6 +18,13 @@ export interface DebugRequest {
    * to forward JSON, and importing the fact type here would couple the
    * transport to a contract that gains fields independently of it.
    */
+  /**
+   * How the caller will check the fix: a command that reproduces the failure,
+   * and what it should give once fixed. Never run by DebugAI; every fix's
+   * verify_with becomes this command (field report 2026-09-16, R11).
+   */
+  repro_command?: string;
+  repro_expected?: string;
   workspace_facts?: object;
 }
 
@@ -47,6 +54,12 @@ export interface DebugFix {
   edits?: DebugEdit[];
   unified_diff?: string;
   verify_with?: string;
+  /** 'reproduction' when verify_with is the caller's own reproduction command. */
+  verify_kind?: 'reproduction' | string;
+  /** What that command should give once the fix works, as the caller said. */
+  verify_expect?: string;
+  /** The syntax check verify_with held before a reproduction replaced it. */
+  syntax_check?: string;
 }
 
 export interface DebugResponse {

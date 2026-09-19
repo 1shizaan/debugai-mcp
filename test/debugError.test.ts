@@ -450,3 +450,37 @@ describe('the language enum covers what people actually debug', () => {
     expect(schema.enum).not.toContain('klingon');
   });
 });
+
+// ── How the fix will be checked (field report 2026-09-16, R11) ──────────────
+describe('reproCommand and expected', () => {
+  it('are forwarded as repro_command and repro_expected', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ root_cause: 'r', fixes: [] }), { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const { client } = await connectedClient();
+    await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'QR does not scan', reproCommand: 'pytest -k qr', expected: '1 passed' },
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).toMatchObject({ repro_command: 'pytest -k qr', repro_expected: '1 passed' });
+  });
+
+  it('turn the check line into the reproduction, keeping the syntax check as optional', () => {
+    const out = formatFix({
+      title: 't', description: 'd', confidence: 80, code: 'x = 1',
+      verify_with: 'pytest -k qr', verify_kind: 'reproduction', verify_expect: '1 passed',
+      syntax_check: 'python -m py_compile a.py',
+    } as any, 1);
+    expect(out).toContain('_Check after applying: run `pytest -k qr`; expected: 1 passed. Then call report_outcome');
+    expect(out).toContain('Quick syntax check first, if you like: `python -m py_compile a.py`');
+    expect(out).not.toContain('Syntax-level check after applying');
+  });
+
+  it('leave the syntax check line exactly as it was when no reproduction was given', () => {
+    const out = formatFix({ title: 't', description: 'd', confidence: 80, verify_with: 'node --check a.js' } as any, 1);
+    expect(out).toContain('_Syntax-level check after applying: `node --check a.js`_');
+    expect(out).not.toContain('Check after applying: run');
+  });
+});

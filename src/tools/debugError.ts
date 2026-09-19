@@ -47,7 +47,16 @@ export function formatFix(fix: DebugFix, index: number): string {
   if (fix.unified_diff && !fix.code) {
     lines.push('```diff', fix.unified_diff.trimEnd(), '```');
   }
-  if (fix.verify_with) {
+  if (fix.verify_with && fix.verify_kind === 'reproduction') {
+    // The caller's own reproduction (reproCommand), which DebugAI did not run.
+    // Field report 2026-09-16, R11: a syntax check was offered as the way to
+    // confirm fixes for bugs no syntax check could see.
+    const expect = fix.verify_expect ? `; expected: ${fix.verify_expect}` : '';
+    lines.push(`_Check after applying: run \`${fix.verify_with}\`${expect}. Then call report_outcome with what happened._`);
+    if (fix.syntax_check) {
+      lines.push(`_Quick syntax check first, if you like: \`${fix.syntax_check}\`_`);
+    }
+  } else if (fix.verify_with) {
     lines.push(`_Syntax-level check after applying: \`${fix.verify_with}\`_`);
   }
   return lines.join('\n');
@@ -130,6 +139,20 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             'Absolute or relative path to the file that threw the error, if known. An ABSOLUTE ' +
             'path also tells DebugAI which repository the error belongs to.',
           ),
+        reproCommand: z
+          .string()
+          .max(500)
+          .optional()
+          .describe(
+            'The command that reproduces the failure, if you have one: a test, a script, a curl. ' +
+            'DebugAI does not run it. Fix #1 is aimed at making it pass, and every fix\'s check ' +
+            'becomes "run this, expect that" instead of a syntax check. Pass it whenever you can.',
+          ),
+        expected: z
+          .string()
+          .max(500)
+          .optional()
+          .describe('What reproCommand should print or do once the bug is fixed. Used with reproCommand.'),
         projectRoot: z
           .string()
           .optional()
@@ -144,7 +167,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         title: 'Debug Error',
       },
     },
-    async ({ errorText, language, codeSnippet, filePath, projectRoot }) => {
+    async ({ errorText, language, codeSnippet, filePath, projectRoot, reproCommand, expected }) => {
       const gate = await resolveAuth(config);
       if (!gate.ok) return gate.result;
 
@@ -195,6 +218,8 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             // md5(workspaceFolder) for the same checkout. See ../project.ts.
             project_id:     projectId,
             workspace_facts: workspaceFacts ?? undefined,
+            repro_command:  reproCommand,
+            repro_expected: expected,
             // framework_hint deliberately omitted: a language ('python') is not a
             // framework ('fastapi'), and sending it bypasses the engine's
             // framework detection — FastAPI/React errors lose their expert hints.
