@@ -35,6 +35,12 @@ describe('outcomeAck', () => {
     expect(bare).toContain('No follow-up error was sent');
   });
 
+  it('tells a failure report what memory does with it: shown to the next analyses as one not to repeat', () => {
+    const text = outcomeAck({ result: 'failed', newError: 'TypeError: y' });
+    expect(text).toContain('as one not to repeat');
+    expect(text).toContain('for the next week');
+  });
+
   it('thanks an unused report for the real fix only when one came with it', () => {
     expect(outcomeAck({ result: 'unused', actualFix: 'pinned numpy' })).toContain('actually worked was logged');
     expect(outcomeAck({ result: 'unused' })).toContain('send it in actualFix');

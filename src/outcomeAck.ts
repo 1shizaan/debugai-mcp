@@ -64,8 +64,11 @@ export function outcomeAck(r: OutcomeReport): string {
       text =
         'Outcome recorded: fix failed.' +
         (r.newError
-          ? ' The follow-up error was logged and feeds directly into improving future answers.'
+          ? ' The follow-up error was logged with it.'
           : ' No follow-up error was sent, so only the failure itself was logged.') +
+        ' When the answer was filed under a project, that project\'s analyses and lookups ' +
+        'are shown this fix for the next week as one not to repeat, however the next ' +
+        'error is worded.' +
         ' If you are still stuck, call debug_error again with the NEW error text.';
       break;
     default: {
