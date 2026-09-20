@@ -78,17 +78,23 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
     {
       title: 'Debug Error',
       description:
-        'Analyze a runtime error, exception, or stack trace and return root cause + ranked fixes. ' +
-        'Use whenever the user pastes an error, asks "why is this failing", "what does this error mean", ' +
-        '"debug this stack trace", "fix this exception", "analyze this traceback", or shows a ' +
-        'Traceback / TypeError / ReferenceError / AttributeError. ' +
+        'Diagnose a failing command, error, exception, stack trace or failing test, and return ' +
+        'a root cause plus ranked fixes. ' +
+        'Call it the moment something fails, INCLUDING when you caused the failure yourself: ' +
+        'a build or typecheck exiting non-zero (tsc, cargo, go build, mvn, dotnet), a linter ' +
+        'reporting errors, a test suite going red, a script exiting non-zero, a runtime ' +
+        'throwing, or the user pasting a traceback. Do not wait to be asked and do not skip it ' +
+        'because you think you already know the fix: it answers from this project history, ' +
+        'which is not derivable from the code in front of you, and a reported outcome on a ' +
+        'known error is what makes the next answer better. ' +
         'Works for Python, JavaScript, TypeScript, Go, Rust, Java, C#, and more. ' +
         'Also takes a bug with NO error message: describe what you expected, what happened ' +
         'instead, and the code in between, and it is analysed like any other error. ' +
         'Pass the raw error text — this server runs locally and reads the source files the ' +
         'stack trace names, so you do not need to locate and paste the code first. ' +
-        'Returns root cause explanation plus up to 3 ranked fixes with machine-applicable code edits. ' +
-        'After applying a fix, report whether it worked via the report_outcome tool.',
+        'Returns root cause plus up to 3 ranked fixes, each carrying machine-applicable edits ' +
+        'that name the file they belong to and, where one can be derived, the check to run ' +
+        'after applying. Then call report_outcome.',
       inputSchema: {
         errorText: z
           .string()

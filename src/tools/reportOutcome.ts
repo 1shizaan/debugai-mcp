@@ -60,6 +60,8 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
         'Call this ONCE per debug_error response, passing the debug_log_id from it. ' +
         'If you solved the problem another way, say so with result "unused" and put the real ' +
         'fix in actualFix: a case DebugAI got wrong is worth more to it than one it got right. ' +
+        'A right diagnosis whose fix did not apply is "unused" as well, never "failed" - ' +
+        'nothing of ours ran, and those two need opposite repairs. ' +
         'If the tool could have helped you more here, say that in toolFeedback. ' +
         'A confirmed fix is remembered for this project and returned to whoever hits the same ' +
         'error next: the fix you name in fixRank, or with "worked_modified" the code you send ' +
