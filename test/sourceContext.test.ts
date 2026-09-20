@@ -456,3 +456,18 @@ describe('a loose pattern does not turn prose into a path', () => {
       .toBe('C:\\proj\\Program.cs');
   });
 });
+
+describe('a .NET frame in a Windows project path', () => {
+  it('survives the spaces that path has', () => {
+    // C:\Users\Bob\My Proj\ is the normal case on a .NET machine. A class that
+    // stops at the first space is this repo's oldest path bug; the closing
+    // paren of the method signature is what bounds this one safely.
+    expect(extractFrames('   at P.Main(String[] a) in C:\\My Proj\\Program.cs:line 42')[0])
+      .toEqual({ path: 'C:\\My Proj\\Program.cs', line: 42 });
+  });
+
+  it('does not read a sentence as one', () => {
+    expect(extractFrames('described in src/notes.md:line 9 above')).toEqual([]);
+    expect(extractFrames('Documented in the guide at some.path:line 4')).toEqual([]);
+  });
+});

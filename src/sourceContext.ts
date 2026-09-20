@@ -130,8 +130,15 @@ const GENERIC    = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.(?:go|rs|rb|java|kt|kts
 const PAREN_POS  = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.[A-Za-z][A-Za-z0-9]{0,9})\((\d+)(?:,\d+)?\)\s*:/gm;
 /** javac and the Maven compiler plugin: `EmployeeDto.java:[42,8]`. */
 const BRACKET_POS = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.[A-Za-z][A-Za-z0-9]{0,9}):\[(\d+),\d+\]/gm;
-/** A .NET runtime frame: `... in C:\proj\src\Program.cs:line 42`. */
-const DOTNET_IN  = /\bin\s+((?:[A-Za-z]:)?[^\r\n(){}"'<>|*?]+?):line\s+(\d+)/g;
+/**
+ * A .NET runtime frame: `... in C:\proj\src\Program.cs:line 42`.
+ * Anchored on the closing paren of the method signature, which is always there
+ * (`at Type.Method(argtypes) in <path>:line N`) and is what lets the class
+ * admit a space without reading prose as a path. Windows .NET projects live
+ * under `C:\Users\Bob\My Proj\`, so a class that stops at the first space is
+ * this repository's oldest path bug wearing new code.
+ */
+const DOTNET_IN  = /\)\s+in\s+((?:[A-Za-z]:)?[^\r\n(){}"'<>|*?]+?):line\s+(\d+)/g;
 /**
  * PowerShell: `At C:\Users\Bob\My Scripts\tool.ps1:42 char:5`.
  * The class admits spaces, which GENERIC may never do because it matches
