@@ -11,6 +11,7 @@ import { API_ERROR_MAX_CHARS, fitErrorText } from '../fitErrorText.js';
 import { memorySection } from '../memorySection.js';
 import { resolveSourceContext } from '../sourceContext.js';
 import { gatherWorkspaceFacts } from '../gatherWorkspaceFacts.js';
+import { clientUpdateBanner } from '../clientUpdate.js';
 
 // Tri-state verification labeling (docs/plan-v2-contract-phase1.md §1).
 // The null case is rendered ON PURPOSE: a confidence number nothing checked
@@ -247,7 +248,12 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           gate.config,
         );
 
-        const sections: string[] = ['## Root Cause', result.root_cause ?? '(no root cause returned)'];
+        const sections: string[] = [];
+        // Above the diagnosis, not glued to the end of it. A server this old
+        // may be missing client-side fixes the answer below assumes.
+        const update = clientUpdateBanner(result.client_update);
+        if (update) { sections.push(update); }
+        sections.push('## Root Cause', result.root_cause ?? '(no root cause returned)');
 
         if (result.fixes?.length) {
           sections.push('\n## Fixes');

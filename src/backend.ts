@@ -98,6 +98,12 @@ export interface DebugResponse {
   memory_fix_state?: string;
   /** Times a live session watched the error stop after the fix. A click does not count. */
   memory_verified_count?: number;
+  /**
+   * Set by the API when this server is older than the newest npm release.
+   * Its own field on purpose: the note used to ride the end of root_cause
+   * and was read as boilerplate for five releases (see ../clientUpdate.ts).
+   */
+  client_update?: { current: string; latest: string; command: string };
 }
 
 // report_outcome → POST /user/debug-feedback (the unified outcome pipeline —
