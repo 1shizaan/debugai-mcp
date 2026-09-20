@@ -56,8 +56,16 @@ export const WINDOW = 40;
 
 const SOURCE_EXT = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
-  '.py', '.go', '.rs', '.rb', '.java', '.kt', '.php', '.cs', '.swift',
-  '.vue', '.svelte',
+  '.py', '.go', '.rs', '.rb', '.java', '.kt', '.kts', '.php', '.cs', '.swift',
+  '.vue', '.svelte', '.scala', '.dart', '.groovy',
+  // C family and Python stubs. Added by the parity test below on its first run:
+  // the engine extracts these paths, so refusing to open them means naming a
+  // file and never sending it.
+  '.c', '.cc', '.cpp', '.h', '.hpp', '.pyi',
+  // PowerShell and Gradle. Both arrived with the account whose 13 debugs all
+  // recorded trace_files=0, and a `build.gradle` really is the file a Gradle
+  // failure is about. Still an extension allowlist: no manifest, no `.env`.
+  '.ps1', '.psm1', '.psd1', '.gradle',
 ]);
 
 const VENDOR = /(^|\/)(node_modules|site-packages|\.venv|venv|vendor|dist|build|\.next|target)(\/|$)/;
@@ -108,7 +116,63 @@ const PY_LINE_REF = /(?:^|\s)([\w./\\-]+\.py):(\d+):/gm;
 const JS_FRAME   = /at\s+(?:[^\n(]*\(\s*)?([^\n()]+?\.(?:js|ts|jsx|tsx|mjs|cjs)):(\d+)/g;
 const JS_BARE    = /(?:^|[\s❯>|►])((?:[A-Za-z]:)?[\w./\\-]+\.(?:js|ts|jsx|tsx|mjs|cjs)):(\d+)/g;
 /** Go, Rust, Ruby, Java and friends: `path/file.ext:123` on its own. */
-const GENERIC    = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.(?:go|rs|rb|java|kt|php|cs|swift|vue|svelte)):(\d+)/g;
+const GENERIC    = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.(?:go|rs|rb|java|kt|kts|php|cs|swift|vue|svelte|scala|dart|groovy|ps1|psm1|psd1)):(\d+)/g;
+
+// ── The shapes `:line` cannot express ────────────────────────────────────────
+//
+// Every pattern above wants `path:123`. Four toolchains do not write one, and
+// between them they are most of what a non-JS, non-Python agent sends. The
+// engine reads all four (apps/engine/app/services/error_location.py); this is
+// the client half, and it is the half that decides which files get READ OFF
+// DISK and sent, so a miss here costs the answer its real source.
+
+/** MSBuild, Roslyn and tsc: `Catalog/Persistence.cs(44,126): error CS1729`. */
+const PAREN_POS  = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.[A-Za-z][A-Za-z0-9]{0,9})\((\d+)(?:,\d+)?\)\s*:/gm;
+/** javac and the Maven compiler plugin: `EmployeeDto.java:[42,8]`. */
+const BRACKET_POS = /(?:^|[\s(])((?:[A-Za-z]:)?[^\s():]+\.[A-Za-z][A-Za-z0-9]{0,9}):\[(\d+),\d+\]/gm;
+/** A .NET runtime frame: `... in C:\proj\src\Program.cs:line 42`. */
+const DOTNET_IN  = /\bin\s+((?:[A-Za-z]:)?[^\r\n(){}"'<>|*?]+?):line\s+(\d+)/g;
+/**
+ * PowerShell: `At C:\Users\Bob\My Scripts\tool.ps1:42 char:5`.
+ * The class admits spaces, which GENERIC may never do because it matches
+ * mid-line and would read a sentence as a path. This shape is bounded at both
+ * ends, so it can.
+ */
+const PS_POS     = /^\s*At\s+((?:[A-Za-z]:)?[^\r\n(){}"'<>|*?]+?):(\d+)\s+char:\d+/gm;
+/** Gradle: `Build file '/home/u/proj/app/build.gradle' line: 23`. */
+const GRADLE_POS = /(?:Build file|Settings file|Script)\s+'([^'\r\n]+)'\s+line:\s*(\d+)/gi;
+
+/**
+ * A JVM frame names a BASENAME only, so the path cannot say whose file it is:
+ * `Thread.java` and `OrderService.java` look identical once the frame is gone,
+ * and VENDOR has no directory to match. The package is sitting one character to
+ * the left. Without this, an ordinary Spring traceback sends the agent looking
+ * on disk for the JDK.
+ */
+const JVM_FRAME  = /\bat\s+([\w$.]+(?:\/[\w$.]+)?)\.[\w$<>]+\s*\(([^\s()/\\]+\.(?:java|kt|kts|scala|groovy)):(\d+)\)/g;
+const JVM_VENDOR = /^(?:java|javax|jdk|sun|jakarta|kotlin|kotlinx|scala|groovy|android|androidx|com\.(?:sun|google|fasterxml|intellij)|org\.(?:springframework|apache|junit|gradle|jetbrains|slf4j|hibernate|eclipse|testng|mockito|assertj|graalvm|w3c|xml)|io\.(?:netty|micronaut|quarkus|vertx|reactivex))\b/i;
+
+/** Basenames named only by runtime or framework frames. */
+function jvmVendorFiles(text: string): Set<string> {
+  const vendor = new Set<string>();
+  const owned = new Set<string>();
+  for (const m of text.matchAll(JVM_FRAME)) {
+    // `java.base/java.lang.Thread` - the module prefix is not the package.
+    const pkg = m[1].split('/').pop() ?? '';
+    (JVM_VENDOR.test(pkg) ? vendor : owned).add(m[2]);
+  }
+  for (const name of owned) { vendor.delete(name); }
+  return vendor;
+}
+
+/**
+ * `file:///home/u/Main.kt` and `file:///C:/proj/x.ts` both arrive here, from V8
+ * and from the Kotlin compiler. No pattern above can span the scheme's colon,
+ * so it comes off the text first and a POSIX path keeps its leading slash while
+ * a Windows one presents its drive letter like any other path. `normalisePath`
+ * still strips it too, for a path that reached us some other way.
+ */
+const FILE_SCHEME = /\bfile:\/\/(?:localhost)?\/*/gi;
 
 // A V8 stack on Windows prints a file: URL, not a path:
 //   file:///C:/Users/R/Axiom%20Workspace/src/App.tsx
@@ -148,24 +212,32 @@ function isVendor(p: string): boolean {
 export function extractFrames(errorText: string): Frame[] {
   if (!errorText) return [];
 
+  const text = errorText.replace(FILE_SCHEME, '/');
+  const skip = jvmVendorFiles(text);
+
   const out: Frame[] = [];
   const seen = new Set<string>();
   const push = (f: Frame): void => {
     const key = `${f.path}:${f.line ?? ''}`;
-    if (!isVendor(f.path) && !seen.has(key)) {
+    if (!isVendor(f.path) && !skip.has(f.path) && !seen.has(key)) {
       seen.add(key);
       out.push(f);
     }
   };
 
-  collect(errorText, PY_FRAME, true).reverse().forEach(push);
-  collect(errorText, JS_FRAME, true).forEach(push);
-  collect(errorText, JS_BARE, true).forEach(push);
-  collect(errorText, GENERIC, true).forEach(push);
+  collect(text, PY_FRAME, true).reverse().forEach(push);
+  collect(text, JS_FRAME, true).forEach(push);
+  collect(text, JS_BARE, true).forEach(push);
+  collect(text, PAREN_POS, true).forEach(push);
+  collect(text, BRACKET_POS, true).forEach(push);
+  collect(text, DOTNET_IN, true).forEach(push);
+  collect(text, PS_POS, true).forEach(push);
+  collect(text, GRADLE_POS, true).forEach(push);
+  collect(text, GENERIC, true).forEach(push);
   // Test-runner shapes carry no frame at all. Last, because a pytest node id
   // names the TEST file, which is a weaker guess than any real frame.
-  collect(errorText, PY_LINE_REF, true).forEach(push);
-  collect(errorText, PY_TEST_ID, false).forEach(push);
+  collect(text, PY_LINE_REF, true).forEach(push);
+  collect(text, PY_TEST_ID, false).forEach(push);
 
   return out;
 }

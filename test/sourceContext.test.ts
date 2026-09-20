@@ -357,3 +357,77 @@ describe('a Windows project path contains spaces', () => {
         }
     });
 });
+
+// ── Every toolchain, not two (2026-09-20) ────────────────────────────────────
+//
+// This module decides which files are READ OFF DISK and sent, so a shape it
+// cannot see costs the answer its real source. The engine's half of this gap
+// was measured at trace_files=0 on 115 of 153 production rows; these are the
+// shapes that were missing on the client side.
+describe('extractFrames across toolchains', () => {
+  const paths = (t: string): string[] => extractFrames(t).map((f) => f.path);
+
+  it('reads an MSBuild diagnostic, which has no :line at all', () => {
+    expect(paths('Catalog.Infrastructure/Persistence.cs(44,126): error CS1729: nope'))
+      .toContain('Catalog.Infrastructure/Persistence.cs');
+  });
+
+  it('reads a javac/Maven bracket position', () => {
+    expect(paths('/p/src/main/java/com/acme/EmployeeDto.java:[42,8] duplicate class'))
+      .toContain('/p/src/main/java/com/acme/EmployeeDto.java');
+  });
+
+  it('reads a .NET runtime frame, where "line" sits where a number should', () => {
+    expect(paths('   at Catalog.Api.Program.Main() in C:\\proj\\src\\Program.cs:line 42'))
+      .toContain('C:\\proj\\src\\Program.cs');
+  });
+
+  it('reads a PowerShell position, spaces in the path included', () => {
+    expect(paths('At C:\\Users\\Bob\\My Scripts\\yara tool.ps1:42 char:5'))
+      .toContain('C:\\Users\\Bob\\My Scripts\\yara tool.ps1');
+  });
+
+  it('reads the Gradle build file a failure is about', () => {
+    expect(paths("* Where:\nBuild file '/home/u/proj/app/build.gradle' line: 23"))
+      .toContain('/home/u/proj/app/build.gradle');
+  });
+
+  it('keeps the line number, because the window is built around it', () => {
+    const [frame] = extractFrames('Catalog/Persistence.cs(44,126): error CS1729: nope');
+    expect(frame).toEqual({ path: 'Catalog/Persistence.cs', line: 44 });
+  });
+
+  it('strips a file:// scheme so a Kotlin path is not welded to it', () => {
+    expect(paths('e: file:///home/u/app/Main.kt:18:9 Unresolved reference'))
+      .toContain('/home/u/app/Main.kt');
+    expect(paths('at x (file:///C:/proj/src/App.tsx:3:1)')).toContain('C:/proj/src/App.tsx');
+  });
+
+  it('does not send the agent looking for the JDK', () => {
+    // A JVM frame prints the basename alone, so only the package says whose
+    // file it is. Per FILE, not per frame: a user frame rescues the name.
+    const java = [
+      'at com.acme.svc.OrderService.load(OrderService.java:44)',
+      'at org.springframework.web.filter.OncePerRequestFilter.doFilter(OncePerRequestFilter.java:116)',
+      'at java.base/java.lang.Thread.run(Thread.java:840)',
+    ].join('\n');
+    const got = paths(java);
+    expect(got).toContain('OrderService.java');
+    expect(got).not.toContain('Thread.java');
+    expect(got).not.toContain('OncePerRequestFilter.java');
+
+    expect(paths([
+      'at org.apache.tool.Runner.run(Runner.java:12)',
+      'at com.acme.app.Runner.start(Runner.java:40)',
+    ].join('\n'))).toContain('Runner.java');
+  });
+
+  it('still refuses to open anything that is not a source extension', () => {
+    // The allowlist grew; it is still an allowlist. A manifest has no source
+    // extension and `.env` has none either, which is what keeps them out.
+    expect(isReadableSource('/p/.env')).toBe(false);
+    expect(isReadableSource('/p/appsettings.json')).toBe(false);
+    expect(isReadableSource('/p/app/build.gradle')).toBe(true);
+    expect(isReadableSource('/p/tool.ps1')).toBe(true);
+  });
+});
