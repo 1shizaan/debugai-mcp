@@ -56,8 +56,10 @@ fix's check is that command rather than a syntax check. DebugAI never runs it.
 
 Read the root cause carefully and treat the patch as a draft. Apply an edit when
 its old_string still matches the file; otherwise write the fix yourself from the
-root cause, which is the half that is hard to get right. Then run the check on
-the fix you used and report what happened.
+root cause, which is the half that is hard to get right. Then re-run whatever
+failed and report what happened. A fix may carry its own check in verify_with,
+but only where one can be derived, so treat that field as a bonus and not as
+the plan - passing reproCommand is how you get a check worth trusting.
 
 Pass the raw error or traceback. You do not need to find and paste the source
 first: this server runs on the same machine as the code, so it resolves the

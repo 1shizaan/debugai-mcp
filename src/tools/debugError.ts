@@ -93,9 +93,10 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         'instead, and the code in between, and it is analysed like any other error. ' +
         'Pass the raw error text — this server runs locally and reads the source files the ' +
         'stack trace names, so you do not need to locate and paste the code first. ' +
-        'Returns root cause plus up to 3 ranked fixes, each carrying machine-applicable edits ' +
-        'that name the file they belong to and, where one can be derived, the check to run ' +
-        'after applying. Then call report_outcome.',
+        'Returns root cause plus up to 3 ranked fixes. Where an edit can be derived honestly ' +
+        'a fix carries one, naming the file it belongs to; a fix that cannot be expressed as ' +
+        'an exact replacement carries none rather than a guess, so read the root cause and ' +
+        'write it yourself. Then call report_outcome.',
       inputSchema: {
         errorText: z
           .string()
