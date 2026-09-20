@@ -14,10 +14,10 @@ Before any of that, `lookup_error` asks your project's memory whether this error
 
 Auto-configures Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Gemini CLI, and Cline. Works in any other MCP client with a manual entry. Node 18 or later.
 
-**New in 2.6.0:** `lookup_error`, the Claude Code hook, `reproCommand` so a fix
-is aimed at the check you will actually run, and `worked_modified` so a fix that
-only held after your agent changed it is remembered as that version. Every answer
-now names the project it was filed under and the build that wrote it.
+**New in 2.7.0:** machine-applicable edits now name the file their code is
+actually in, the tools say to call them the moment something fails rather than
+waiting for you to paste an error, and a server that has fallen behind says so
+once per session instead of in the middle of every diagnosis.
 See the [changelog](https://debugai.io/changelog?src=npm-readme).
 
 **If a fix does not work, tell me and I will fix it.** The fixes that did not
@@ -321,6 +321,34 @@ Recent server-side work, all of it live for agents already:
   reaches a model.
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
+
+**2.7.0** - Built from a second agent's field report, this time from a greenfield
+project on libraries newer than any model's training data (2026-09-20).
+
+- **An edit names the file its code is in.** This server resolves every file a
+  stack trace names and sends them together; each fix's `edits[].file` used to
+  carry the first of them whatever the fix was for, along with the diff headers,
+  the check command and the line number. Applying one blind wrote one file's code
+  into another, or - more often - failed to match and cost you a re-read. The
+  line number now comes back in that file's own numbering, and a fix that spans
+  two files gets no edit rather than a confident wrong path.
+- **The tools describe the moment you are actually in.** Every trigger used to be
+  the user doing something: "use whenever the user pastes an error". In an agent
+  session nobody pastes anything - the agent ran the build. `debug_error` now
+  says to call it the moment something fails, including when the agent caused the
+  failure itself, and names the moments: a typecheck exiting non-zero, a linter
+  reporting errors, a test suite going red.
+- **`report_outcome` separates a wrong patch from a wrong diagnosis.** A correct
+  root cause whose fix did not apply is `unused`, never `failed`. Filing it as
+  failed blames the diagnosis for the patch, and those need opposite repairs.
+- **A stale client says so once, at the top, and not again.** The notice used to
+  be appended to `root_cause`, the field an agent quotes to its user, on every
+  answer. One agent read it as boilerplate for a whole session while running a
+  version five releases old. It is now its own field, rendered above the
+  diagnosis, once per process.
+- **The bundled VS Code server gets the same instructions as this one.** The two
+  had drifted, and the bundled copy had lost the paragraph saying it reads the
+  source files a stack trace names.
 
 **2.6.0** - Built from one agent's field report on a week of real use (2026-09-16), finding by finding.
 
