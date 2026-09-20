@@ -431,3 +431,28 @@ describe('extractFrames across toolchains', () => {
     expect(isReadableSource('/p/tool.ps1')).toBe(true);
   });
 });
+
+describe('a loose pattern does not turn prose into a path', () => {
+  // PowerShell without a script file writes `At line:1 char:1`, which is its
+  // commonest shape; Gradle quotes whatever it has. Each yielded a one-word
+  // "path". isReadableSource refused them, but that is a different guard
+  // catching it by accident - the engine refuses them on purpose and so does
+  // this now (error_location._looks_like_file).
+  it.each([
+    ['powershell with no script file', 'At line:1 char:1\n+ Get-Evt'],
+    ['prose that reads like .NET', 'The value was set in config:line 4 of the doc'],
+    ['gradle quoting a non-path', "Build file 'unknown' line: 2"],
+    ['a python pseudo-file', 'File "<string>", line 1'],
+  ])('%s yields no frame', (_name, text) => {
+    expect(extractFrames(text)).toEqual([]);
+  });
+
+  it('still reads the real thing in each of those shapes', () => {
+    expect(extractFrames('At C:\\scripts\\tool.ps1:42 char:5')[0].path)
+      .toBe('C:\\scripts\\tool.ps1');
+    expect(extractFrames("Build file '/home/u/app/build.gradle' line: 23")[0].path)
+      .toBe('/home/u/app/build.gradle');
+    expect(extractFrames('   at P.Main() in C:\\proj\\Program.cs:line 42')[0].path)
+      .toBe('C:\\proj\\Program.cs');
+  });
+});

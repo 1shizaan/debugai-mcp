@@ -152,6 +152,32 @@ const GRADLE_POS = /(?:Build file|Settings file|Script)\s+'([^'\r\n]+)'\s+line:\
 const JVM_FRAME  = /\bat\s+([\w$.]+(?:\/[\w$.]+)?)\.[\w$<>]+\s*\(([^\s()/\\]+\.(?:java|kt|kts|scala|groovy)):(\d+)\)/g;
 const JVM_VENDOR = /^(?:java|javax|jdk|sun|jakarta|kotlin|kotlinx|scala|groovy|android|androidx|com\.(?:sun|google|fasterxml|intellij)|org\.(?:springframework|apache|junit|gradle|jetbrains|slf4j|hibernate|eclipse|testng|mockito|assertj|graalvm|w3c|xml)|io\.(?:netty|micronaut|quarkus|vertx|reactivex))\b/i;
 
+/**
+ * Does this name a file at all? Its last segment has to carry a dot.
+ *
+ * The three patterns above are loose by necessity - a PowerShell path may hold
+ * spaces and a Gradle path is arbitrary - so each of them yields a one-word
+ * "path" on text that is not one:
+ *
+ *     At line:1 char:1                PowerShell with no script file, which is
+ *                                     its commonest shape. `line` is not a path
+ *     Build file 'unknown' line: 2    Gradle, quoting whatever it has
+ *     ...described in section:line 4  prose that reads like a .NET frame
+ *
+ * Today `isReadableSource` refuses all three, because a one-word name has no
+ * source extension - but that is an accident of a different guard, and the
+ * engine's half of this (`_looks_like_file` in error_location.py) refuses them
+ * on purpose. Both sides answer the same way for the same reason.
+ */
+function looksLikeFile(p: string): boolean {
+  const s = (p ?? '').trim().replace(/^["']|["']$/g, '');
+  if (!s || s.length > 400) { return false; }
+  // <string>, <stdin>, <anonymous> - not files on disk.
+  if (s.startsWith('<') && s.endsWith('>')) { return false; }
+  const last = s.split(/[/\\]/).pop() ?? '';
+  return last.includes('.') && !last.endsWith('.');
+}
+
 /** Basenames named only by runtime or framework frames. */
 function jvmVendorFiles(text: string): Set<string> {
   const vendor = new Set<string>();
@@ -219,7 +245,7 @@ export function extractFrames(errorText: string): Frame[] {
   const seen = new Set<string>();
   const push = (f: Frame): void => {
     const key = `${f.path}:${f.line ?? ''}`;
-    if (!isVendor(f.path) && !skip.has(f.path) && !seen.has(key)) {
+    if (looksLikeFile(f.path) && !isVendor(f.path) && !skip.has(f.path) && !seen.has(key)) {
       seen.add(key);
       out.push(f);
     }

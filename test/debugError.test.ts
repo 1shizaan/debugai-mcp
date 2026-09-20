@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { __resetClientUpdate } from '../src/clientUpdate.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -533,5 +534,53 @@ describe('which builds answered (field report 2026-09-16, R1)', () => {
     const text = result.content[0].type === 'text' ? result.content[0].text : '';
     expect(text).toContain('DebugAI MCP 1.0.0-test · Engine debug-v7+4ba459f');
     expect(result.structuredContent).toMatchObject({ engine_version: 'debug-v7+4ba459f' });
+  });
+});
+
+// ── The stale-client notice reaches the agent, through the real handler ──────
+//
+// A19: a correct decision nothing on the request path reaches has shipped in
+// this repo before. The API sets `client_update`; this asserts the tool the
+// agent actually calls renders it, above the diagnosis, once.
+describe('client_update', () => {
+  const answer = (extra: Record<string, unknown>) =>
+    vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      root_cause: 'The list is empty when .pop() is called.',
+      fixes: [],
+      ...extra,
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+  it('is rendered above the root cause on the first answer that carries it', async () => {
+    __resetClientUpdate();
+    vi.stubGlobal('fetch', answer({
+      client_update: { current: '2.1.1', latest: '2.7.0', command: 'npx -y @debugai/mcp@latest install' },
+    }));
+    const { client } = await connectedClient();
+    const result = await client.callTool({ name: 'debug_error', arguments: { errorText: 'boom' } }) as CallToolResult;
+    const text = (result.content as { text: string }[])[0].text;
+
+    expect(text).toContain('2.1.1');
+    expect(text).toContain('npx -y @debugai/mcp@latest install');
+    expect(text.indexOf('This is DebugAI MCP')).toBeLessThan(text.indexOf('## Root Cause'));
+  });
+
+  it('is not repeated on the next answer in the same process', async () => {
+    __resetClientUpdate();
+    vi.stubGlobal('fetch', answer({ client_update: { current: '2.1.1', latest: '2.7.0' } }));
+    const { client } = await connectedClient();
+    const first = await client.callTool({ name: 'debug_error', arguments: { errorText: 'a' } }) as CallToolResult;
+    const second = await client.callTool({ name: 'debug_error', arguments: { errorText: 'b' } }) as CallToolResult;
+    expect((first.content as { text: string }[])[0].text).toContain('This is DebugAI MCP');
+    expect((second.content as { text: string }[])[0].text).not.toContain('This is DebugAI MCP');
+  });
+
+  it('says nothing at all when the API sent no update, which is the normal case', async () => {
+    __resetClientUpdate();
+    vi.stubGlobal('fetch', answer({}));
+    const { client } = await connectedClient();
+    const result = await client.callTool({ name: 'debug_error', arguments: { errorText: 'boom' } }) as CallToolResult;
+    const text = (result.content as { text: string }[])[0].text;
+    expect(text).not.toContain('is published');
+    expect(text.startsWith('## Root Cause')).toBe(true);
   });
 });
