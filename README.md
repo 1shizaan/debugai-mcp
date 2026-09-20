@@ -14,6 +14,18 @@ Before any of that, `lookup_error` asks your project's memory whether this error
 
 Auto-configures Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Gemini CLI, and Cline. Works in any other MCP client with a manual entry. Node 18 or later.
 
+**New in 2.6.0:** `lookup_error`, the Claude Code hook, `reproCommand` so a fix
+is aimed at the check you will actually run, and `worked_modified` so a fix that
+only held after your agent changed it is remembered as that version. Every answer
+now names the project it was filed under and the build that wrote it.
+See the [changelog](https://debugai.io/changelog?src=npm-readme).
+
+**If a fix does not work, tell me and I will fix it.** The fixes that did not
+work are how most of this release got written.
+**[Dashboard → Messages](https://debugai.io/dashboard?tab=messages&src=npm-readme)**,
+with the error you sent and what the fix did instead. It reaches the person who
+builds this.
+
 ## Setup
 
 ```bash
