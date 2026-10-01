@@ -287,62 +287,268 @@ export function depsFromRequirements(text: string): { deps: string[]; sawInclude
     return { deps, sawInclude };
 }
 
+/** One dependency a pyproject declares: its name, and the version text beside it or ''. */
+interface PyDecl { name: string; spec: string; }
+
+/** A TOML value, read far enough to know what it holds and where it stops. */
+interface TomlValue {
+    kind: 'array' | 'table' | 'string' | 'other';
+    /** The strings directly inside an array, or the one string of a string value. */
+    strings: string[];
+    /** The value as written. */
+    raw: string;
+    /** Index of the line end the value stops at. */
+    end: number;
+    /** False when a string or a bracket was still open where the value stopped. */
+    closed: boolean;
+}
+
+function lineEnd(src: string, i: number): number {
+    const n = src.indexOf('\n', i);
+    return n < 0 ? src.length : n;
+}
+
+/**
+ * The quoted TOML string that starts at `i`: its text as written, and where it
+ * ends. A one-line string that reaches the end of its line unclosed stops
+ * there, so a stray quote costs one value and not the rest of the file.
+ */
+function readTomlString(src: string, i: number): { text: string; end: number; closed: boolean } {
+    const q = src[i];
+    const escapes = q === '"';
+    const fence = q + q + q;
+    const multiline = src.startsWith(fence, i);
+    let j = i + (multiline ? 3 : 1);
+    const from = j;
+    while (j < src.length) {
+        if (multiline ? src.startsWith(fence, j) : (src[j] === q || src[j] === '\n')) { break; }
+        j += escapes && src[j] === '\\' ? 2 : 1;
+    }
+    j = Math.min(j, src.length);
+    const closed = j < src.length && src[j] !== '\n';
+    return { text: src.slice(from, j), end: closed ? j + (multiline ? 3 : 1) : j, closed };
+}
+
+/**
+ * A dotted TOML key (`project`, `tool.poetry.dependencies`, `"ruamel.yaml"`)
+ * up to the character that ends it: `=` for a key, `]` for a table header.
+ * A quoted segment keeps its dots, because it is one name.
+ */
+function readTomlKey(src: string, start: number, stop: string): { segs: string[]; end: number } | null {
+    const segs: string[] = [];
+    let i = start;
+    for (;;) {
+        while (src[i] === ' ' || src[i] === '\t') { i++; }
+        if (src[i] === '"' || src[i] === "'") {
+            const s = readTomlString(src, i);
+            if (!s.closed) { return null; }
+            segs.push(s.text);
+            i = s.end;
+        } else {
+            let j = i;
+            while (j < src.length && /[A-Za-z0-9_-]/.test(src[j])) { j++; }
+            if (j === i) { return null; }
+            segs.push(src.slice(i, j));
+            i = j;
+        }
+        while (src[i] === ' ' || src[i] === '\t') { i++; }
+        if (src[i] === '.') { i++; continue; }
+        return src[i] === stop ? { segs, end: i + 1 } : null;
+    }
+}
+
+/**
+ * The value that starts at `start`, across as many lines as its brackets span.
+ *
+ * Quotes are what this exists for. `"uvicorn[standard]>=0.23"` has a `]` in it,
+ * and a reader that takes the first `]` as the end of the array stops there and
+ * loses every dependency listed after it.
+ */
+function readTomlValue(src: string, start: number): TomlValue {
+    let i = start;
+    while (src[i] === ' ' || src[i] === '\t') { i++; }
+    const from = i;
+    const first = src[i];
+    const kind = first === '[' ? 'array' : first === '{' ? 'table'
+        : (first === '"' || first === "'") ? 'string' : 'other';
+    const strings: string[] = [];
+    let depth = 0;
+    let closed = true;
+    while (i < src.length) {
+        const c = src[i];
+        if (c === '"' || c === "'") {
+            const s = readTomlString(src, i);
+            if (!s.closed) { closed = false; }
+            if ((kind === 'array' && depth === 1) || (kind === 'string' && depth === 0)) { strings.push(s.text); }
+            i = s.end;
+        } else if (c === '#') {
+            i = lineEnd(src, i);
+        } else if (c === '\n') {
+            if (depth <= 0) { break; }
+            i++;
+        } else {
+            if (c === '[' || c === '{') { depth++; }
+            if (c === ']' || c === '}') { depth--; }
+            i++;
+        }
+    }
+    if (depth !== 0) { closed = false; }
+    return { kind, strings, raw: src.slice(from, i), end: i, closed };
+}
+
+/**
+ * Name and version out of one requirement string, `uvicorn[standard]>=0.23; ...`.
+ * The extras and the environment marker are dropped. `name @ url` pins a URL,
+ * not a version, so it keeps the name alone.
+ */
+function declFromRequirement(req: string): PyDecl | null {
+    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^;]*)/.exec(req || '');
+    if (!m) { return null; }
+    const spec = m[2].trim().replace(/^\((.*)\)$/, '$1').trim();
+    return { name: m[1], spec: /^[=<>!~^]/.test(spec) ? spec : '' };
+}
+
+/**
+ * Where a poetry dependency's name sits in a key path, or -1.
+ *
+ *     tool.poetry.dependencies.<name>
+ *     tool.poetry.dev-dependencies.<name>           (poetry before 1.2)
+ *     tool.poetry.group.<group>.dependencies.<name>
+ */
+function poetryNameAt(path: string[]): number {
+    if (path[0] !== 'tool' || path[1] !== 'poetry') { return -1; }
+    if (path[2] === 'dependencies' || path[2] === 'dev-dependencies') { return 3; }
+    if (path[2] === 'group' && path[4] === 'dependencies') { return 5; }
+    return -1;
+}
+
+/**
+ * What a `pyproject.toml` declares, read table by table.
+ *
+ * Not a TOML parser: it reads table headers, keys, strings and brackets, which
+ * is what it takes to know WHICH table an array is in and where it ends. The
+ * first version matched every `key = [...]` in the file and ended each at the
+ * first `]`. Measured on 48 real projects (fastapi, flask, django, pandas,
+ * poetry, sentry and others) against a real TOML parser, that reported 3,700
+ * names that are not dependencies (`tests` from pytest's `testpaths`, `src`
+ * from setuptools' `packages`, an author's first name, every ruff rule code)
+ * beside 1,687 that are, and lost 675 real ones, in 19 files of 21 without
+ * saying so. The engine answered `No module named 'tests'` with "`tests` is
+ * already declared as a dependency in pyproject.toml" at confidence 92.
+ *
+ * `[build-system] requires` is not read. Those are installed into the build's
+ * own environment, so `pip install -e .` does not put them where an import
+ * looks for them, and "declared, so install the project" would be wrong.
+ */
+function readPyproject(text: string): { decls: PyDecl[]; found: boolean; partial: boolean } {
+    const src = text || '';
+    const decls: PyDecl[] = [];
+    let found = false;
+    let partial = false;
+    let table: string[] = [];
+
+    const requirements = (v: TomlValue): void => {
+        // Anything but a whole array is a declaration this did not read.
+        if (v.kind !== 'array' || !v.closed) { partial = true; }
+        if (v.kind !== 'array') { return; }
+        for (const s of v.strings) {
+            const d = declFromRequirement(s);
+            if (d) { decls.push(d); }
+        }
+    };
+
+    let i = 0;
+    while (i < src.length) {
+        const c = src[i];
+        if (c === ' ' || c === '\t' || c === '\r' || c === '\n') { i++; continue; }
+        if (c === '#') { i = lineEnd(src, i); continue; }
+        if (c === '[') {
+            const head = readTomlKey(src, src[i + 1] === '[' ? i + 2 : i + 1, ']');
+            // A header that cannot be read owns its keys all the same, or they
+            // would be filed under the table before it.
+            table = head ? head.segs : ['?'];
+            i = lineEnd(src, i);
+            continue;
+        }
+        const key = readTomlKey(src, i, '=');
+        if (!key) { i = lineEnd(src, i); continue; }
+        const value = readTomlValue(src, key.end);
+        i = value.end;
+
+        const p = table.concat(key.segs);
+        const n = p.length;
+        if (p[0] === 'project') {
+            // PEP 621. A [project] table with no `dependencies` key declares
+            // none, unless it says they are computed elsewhere (`dynamic`).
+            found = true;
+            if (n === 2 && p[1] === 'dependencies') { requirements(value); }
+            else if (n === 3 && p[1] === 'optional-dependencies') { requirements(value); }
+            else if (n === 2 && p[1] === 'optional-dependencies') { partial = true; }
+            else if (n === 2 && p[1] === 'dynamic'
+                && value.strings.some(s => s === 'dependencies' || s === 'optional-dependencies')) { partial = true; }
+        } else if (p[0] === 'dependency-groups' && n === 2) {
+            requirements(value);                              // PEP 735
+        } else if (p[0] === 'tool' && (p[1] === 'uv' || p[1] === 'rye') && n === 3 && p[2] === 'dev-dependencies') {
+            requirements(value);
+        } else if (p[0] === 'tool' && p[1] === 'pdm' && n === 4 && p[2] === 'dev-dependencies') {
+            requirements(value);
+        } else if (p[0] === 'tool' && p[1] === 'hatch' && p[2] === 'envs' && n === 5
+            && (p[4] === 'dependencies' || p[4] === 'extra-dependencies')) {
+            requirements(value);
+        } else {
+            const at = poetryNameAt(p);
+            if (at < 0 || n <= at) { continue; }
+            found = true;
+            const name = p[at];
+            // `python = "^3.11"` is the interpreter constraint, not a dependency.
+            if (name.toLowerCase() === 'python' || !/^[A-Za-z0-9._-]+$/.test(name)) { continue; }
+            let spec = '';
+            if (n === at + 1 && value.kind === 'string') {
+                spec = value.strings[0] || '';                // flask = "^3.0"
+            } else if (n === at + 1 && value.kind === 'table') {
+                const v = /\bversion\s*=\s*["']([^"']+)["']/.exec(value.raw);
+                spec = v ? v[1] : '';                         // flask = { version = "^3.0", extras = [...] }
+            } else if (n === at + 2 && p[at + 1] === 'version' && value.kind === 'string') {
+                spec = value.strings[0] || '';                // [tool.poetry.dependencies.flask]
+            }
+            decls.push({ name, spec });
+        }
+    }
+    return { decls, found, partial };
+}
+
 /**
  * Package names from a `pyproject.toml`, without a TOML parser.
  *
- * Bundling one would be the honest engineering answer if the names had to be
- * exact. They do not: a name that survives this is real (a positive conclusion,
- * always safe), and a name this misses is covered by the caller marking the
- * list incomplete (so no negative conclusion is drawn from it). That trade buys
- * out a dependency in a bundle that ships to 652 installs.
+ * Bundling one would be the honest engineering answer if the file had to be
+ * understood whole. It does not: `readPyproject` reads the tables that declare
+ * dependencies and says when it could not, and that buys out a dependency in a
+ * bundle that ships to every install.
  *
- * Two shapes, which between them cover almost every real file:
- *
- *     [project]                      PEP 621, the modern default
+ *     [project]                            PEP 621, the modern default
  *     dependencies = ["flask>=3", "python-dotenv"]
+ *     [project.optional-dependencies]      every group
+ *     [dependency-groups]                  PEP 735, every group
+ *     [tool.poetry.dependencies]           poetry, and its groups
+ *     tool.uv / tool.rye / tool.pdm dev-dependencies, tool.hatch.envs.*
  *
- *     [tool.poetry.dependencies]     poetry, still very common
- *     flask = "^3.0"
+ * Two ways the list can be short, and the caller marks `declared_deps`
+ * incomplete on either, because a name missing from a short list proves
+ * nothing:
  *
- * `found` is false when the file exists but neither shape was recognised —
- * pdm, hatch's dynamic metadata, a dependency-groups-only file. The caller
- * needs that to be a different state from "no pyproject at all", because one
- * means "we could not read the declarations" and the other means "there are
- * none to read".
+ * `found` is false when the file has neither a `[project]` table nor a poetry
+ * dependency table: a setuptools project that declares in `setup.py`, flit's
+ * own metadata, a file of tool settings. The caller needs that to be a
+ * different state from "no pyproject at all", because one means "we could not
+ * read the declarations" and the other means "there are none to read".
+ *
+ * `partial` is true when a declaration was there and not read whole:
+ * `dynamic = ["dependencies"]` (they are computed at build time), an array
+ * that never closes, groups written as one inline table.
  */
-export function depsFromPyproject(text: string): { deps: string[]; found: boolean } {
-    const src = text || '';
-    const deps: string[] = [];
-    let found = false;
-
-    // [project] dependencies = [...] and [project.optional-dependencies] tables.
-    // Matched as an array literal rather than by section, because the same
-    // array shape is what both spell and a section walk would need a parser.
-    const arrayRe = /(?:^|\n)\s*(?:dependencies|[A-Za-z0-9_-]+)\s*=\s*\[([^\]]*)\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = arrayRe.exec(src)) !== null) {
-        const body = m[1];
-        const entryRe = /["']\s*([A-Za-z0-9][A-Za-z0-9._-]*)/g;
-        let e: RegExpExecArray | null;
-        while ((e = entryRe.exec(body)) !== null) {
-            if (usableName(e[1])) { deps.push(e[1]); found = true; }
-        }
-    }
-
-    // [tool.poetry.dependencies] / [tool.poetry.group.*.dependencies]
-    const poetryRe = /\[tool\.poetry(?:\.group\.[A-Za-z0-9_-]+)?\.dependencies\]([\s\S]*?)(?=\n\s*\[|$)/g;
-    while ((m = poetryRe.exec(src)) !== null) {
-        found = true;
-        for (const line of m[1].split(/\r?\n/)) {
-            const key = line.trim().split('=')[0].trim().replace(/^["']|["']$/g, '');
-            // `python = "^3.11"` is the interpreter constraint, not a dependency.
-            if (key && key.toLowerCase() !== 'python' && usableName(key) && /^[A-Za-z0-9._-]+$/.test(key)) {
-                deps.push(key);
-            }
-        }
-    }
-
-    return { deps, found };
+export function depsFromPyproject(text: string): { deps: string[]; found: boolean; partial: boolean } {
+    const { decls, found, partial } = readPyproject(text);
+    return { deps: decls.map(d => d.name).filter(usableName), found, partial };
 }
 
 /**
@@ -397,6 +603,11 @@ export function versionsFromRequirements(text: string): Record<string, string> {
         if (/^[./~]/.test(line) || /^[a-z][a-z0-9+.-]*:\/\//i.test(line)) { continue; }
         line = line.split(/\s+#/)[0];
         line = line.split(';')[0];
+        // `flask==3.0.0 \` then `--hash=sha256:...` is what pip-compile and
+        // `poetry export` write. The option and the line continuation are not
+        // part of the version: with the backslash left on, an exact pin reached
+        // the engine as `==3.0.0 \`, which it reads as a range.
+        line = line.split(/\s+--/)[0].replace(/\s*\\$/, '');
         if (line.includes('@')) { continue; }   // `name @ url` pins a URL, not a version
         const m = line.match(/^([A-Za-z0-9._-]+)\s*(?:\[[^\]]*\])?\s*(.+)$/);
         if (!m) { continue; }
@@ -409,40 +620,15 @@ export function versionsFromRequirements(text: string): Record<string, string> {
 /**
  * Versions from a `pyproject.toml`, keyed by package name.
  *
- * Same two shapes `depsFromPyproject` recognises, and the same trade: a version
- * this finds is real, and one it misses simply is not reported. `declared_deps`
- * already carries `incomplete` for the negative case, and a missing VERSION is
- * never read as "no version constraint" - only as "we did not see one".
+ * The same tables `depsFromPyproject` reads, through the same reader, so the
+ * two cannot disagree about what is declared. A version this finds is real,
+ * and one it misses simply is not reported: a missing VERSION is never read as
+ * "no version constraint", only as "we did not see one".
  */
 export function versionsFromPyproject(text: string): Record<string, string> {
     const out: Record<string, string> = {};
-    const src = text || '';
-
-    // PEP 621: dependencies = ["flask>=3", "python-dotenv==1.0.0"]
-    const arrayRe = /(?:^|\n)\s*(?:dependencies|[A-Za-z0-9_-]+)\s*=\s*\[([^\]]*)\]/g;
-    let m: RegExpExecArray | null;
-    while ((m = arrayRe.exec(src)) !== null) {
-        const entryRe = /["']\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^"']*)["']/g;
-        let e: RegExpExecArray | null;
-        while ((e = entryRe.exec(m[1])) !== null) {
-            const spec = (e[2] || '').split(';')[0].trim();
-            if (/^[=<>!~^]/.test(spec)) { putVersion(out, e[1], spec); }
-        }
-    }
-
-    // poetry: flask = "^3.0"  ·  flask = { version = "^3.0", extras = [...] }
-    const poetryRe = /\[tool\.poetry(?:\.group\.[A-Za-z0-9_-]+)?\.dependencies\]([\s\S]*?)(?=\n\s*\[|$)/g;
-    while ((m = poetryRe.exec(src)) !== null) {
-        for (const line of m[1].split(/\r?\n/)) {
-            const eq = line.indexOf('=');
-            if (eq < 0) { continue; }
-            const key = line.slice(0, eq).trim().replace(/^["']|["']$/g, '');
-            if (!key || key.toLowerCase() === 'python') { continue; }
-            const rest = line.slice(eq + 1).trim();
-            const inline = rest.match(/^\{[^}]*version\s*=\s*["']([^"']+)["']/);
-            const plain = rest.match(/^["']([^"']+)["']/);
-            putVersion(out, key, inline ? inline[1] : (plain ? plain[1] : undefined));
-        }
+    for (const d of readPyproject(text).decls) {
+        if (d.spec) { putVersion(out, d.name, d.spec); }
     }
     return out;
 }
@@ -576,13 +762,14 @@ export function buildWorkspaceFacts(input: FactInputs): WorkspaceFacts {
     }
     if (typeof input.pyprojectToml === 'string') {
         manifests.push('pyproject.toml');
-        const { deps, found } = depsFromPyproject(input.pyprojectToml);
+        const { deps, found, partial } = depsFromPyproject(input.pyprojectToml);
         declared.push(...deps);
         mergeVersions(versions, versionsFromPyproject(input.pyprojectToml));
-        // The file is there and we could not find its declarations. Saying
-        // nothing here would let the engine read our silence as "declares
-        // nothing", which is the one reading that is certainly wrong.
-        if (!found) { incomplete.add('declared_deps'); }
+        // The file is there and we could not find its declarations, or found
+        // them and could not read them whole. Saying nothing here would let
+        // the engine read our silence as "declares nothing", which is the one
+        // reading that is certainly wrong.
+        if (!found || partial) { incomplete.add('declared_deps'); }
     }
 
     if (Array.isArray(input.csprojFiles) && input.csprojFiles.length > 0) {

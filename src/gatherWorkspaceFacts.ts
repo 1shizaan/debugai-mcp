@@ -282,11 +282,12 @@ export function gatherWorkspaceFacts(root: string | null | undefined): GatheredF
       isManifestName(name) ? readCapped(join(abs, name), abs) : null;
 
     // Nested manifests, concatenated per KIND into the same string the root one
-    // occupies. Concatenation is safe for every format here and keeps the pure
-    // builder's contract untouched: requirements.txt is line-oriented, and both
-    // JSON and TOML parsers in `workspaceFacts.ts` are regex-shaped rather than
-    // strict, by the design documented there. A package.json that fails to
-    // parse contributes nothing rather than breaking the set.
+    // occupies. Concatenation is safe for the two text formats and keeps the
+    // pure builder's contract untouched: requirements.txt is line-oriented, and
+    // the pyproject reader in `workspaceFacts.ts` walks tables without asking
+    // that each appear once, so a second file's `[project]` reads like the
+    // first's (a test there pins it). A package.json that fails to parse
+    // contributes nothing rather than breaking the set.
     const extraByKind: Record<string, string[]> = {};
     for (const n of walked.nested) {
       if (Date.now() > deadline) { walked.nestedTruncated = true; break; }
