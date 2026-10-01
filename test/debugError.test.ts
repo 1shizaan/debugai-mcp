@@ -427,6 +427,39 @@ describe('debug_error sends local source when the agent gave none', () => {
     expect(result.structuredContent).toMatchObject({ local_files_read: [] });
   });
 
+  it('treats a blank codeSnippet as none: what it read is what it sends', async () => {
+    // An agent fills an optional string with "" as readily as it leaves it
+    // out. `??` took that for a snippet: the file was read, the reply said
+    // "Read locally:", and the request carried no code and no file path.
+    for (const blank of ['', '   ', '\n\t']) {
+      const fetchMock = okResponse();
+      vi.stubGlobal('fetch', fetchMock);
+      const { client } = await connectedClient();
+      const result = await client.callTool({
+        name: 'debug_error',
+        arguments: { errorText: 'at f (packages/mcp/src/constants.ts:1:1)', codeSnippet: blank, filePath: blank },
+      }) as CallToolResult;
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.code_snippet, JSON.stringify(blank)).toContain('DEFAULT_API_BASE');
+      expect(body.file_path, JSON.stringify(blank)).toContain('constants.ts');
+      expect(textOf(result)).toContain('Read locally:');
+    }
+  });
+
+  it('sends a real snippet exactly as given, its whitespace included', async () => {
+    const fetchMock = okResponse();
+    vi.stubGlobal('fetch', fetchMock);
+    const { client } = await connectedClient();
+    await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'at f (packages/mcp/src/constants.ts:1:1)', codeSnippet: '    return x\n', filePath: 'src/mine.py' },
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.code_snippet).toBe('    return x\n');
+    expect(body.file_path).toBe('src/mine.py');
+  });
+
   it('sends no snippet at all when nothing resolves, rather than inventing one', async () => {
     const fetchMock = okResponse();
     vi.stubGlobal('fetch', fetchMock);

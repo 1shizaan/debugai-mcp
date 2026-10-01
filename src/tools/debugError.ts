@@ -204,12 +204,19 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       const root = explicit?.root ?? getProjectRoot();
       const projectId = explicit?.id ?? getProjectId() ?? undefined;
 
+      // Blank is absent. An agent fills an optional string with "" as readily
+      // as it leaves it out, and `??` took an empty codeSnippet for a snippet:
+      // the files the trace names were read, the reply said "Read locally:",
+      // and what went to the engine was no code and no file path (2026-10-01).
+      const ownSnippet = codeSnippet?.trim() ? codeSnippet : undefined;
+      const namedFile = filePath?.trim() ? filePath : undefined;
+
       let resolved: ReturnType<typeof resolveSourceContext> = null;
-      if (!codeSnippet) {
-        resolved = resolveSourceContext({ errorText, filePath, root });
+      if (!ownSnippet) {
+        resolved = resolveSourceContext({ errorText, filePath: namedFile, root });
       }
-      const snippet = codeSnippet ?? resolved?.snippet;
-      const effectiveFilePath = filePath ?? resolved?.files[0]?.label;
+      const snippet = ownSnippet ?? resolved?.snippet;
+      const effectiveFilePath = namedFile ?? resolved?.files[0]?.label;
 
       // What this repository declares - dependency names and the versions its
       // own manifests pin. The engine cannot read a disk and this process is
