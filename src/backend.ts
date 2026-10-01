@@ -163,6 +163,15 @@ function makeBackendError(message: string, status: number, retryAfterSeconds = 0
   return Object.assign(new Error(message), { status, retryAfterSeconds }) as BackendError;
 }
 
+/**
+ * One POST, held to one deadline from the first byte sent to the last byte read.
+ *
+ * The timer used to be cleared as soon as the status line arrived, so the
+ * deadline covered the wait for headers and nothing after it: an API (or a
+ * proxy in front of it) that answered 200 and then stalled in the body held
+ * the tool call for good. Measured 2026-10-01 against a server doing exactly
+ * that, a lookup with an 8 second deadline was still waiting at 12.
+ */
 async function postJson<T>(
   path: string,
   payload: unknown,
@@ -171,42 +180,64 @@ async function postJson<T>(
 ): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timedOut = (): BackendError => makeBackendError(
+    `DebugAI request timed out after ${Math.round(timeoutMs / 1000)}s`,
+    504,
+  );
 
-  let res: Response;
   try {
-    res = await fetch(`${config.apiBase}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': config.apiKey,
-        'user-agent': `debugai-mcp/${config.version}`,
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    if (controller.signal.aborted) {
+    let res: Response;
+    try {
+      res = await fetch(`${config.apiBase}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': config.apiKey,
+          'user-agent': `debugai-mcp/${config.version}`,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) throw timedOut();
+      // DNS failure, refused connection, no network — status 0 marks "never reached the API"
       throw makeBackendError(
-        `DebugAI request timed out after ${Math.round(timeoutMs / 1000)}s`,
-        504,
+        `Could not reach the DebugAI API at ${config.apiBase}: ${(err as Error)?.message ?? String(err)}`,
+        0,
       );
     }
-    // DNS failure, refused connection, no network — status 0 marks "never reached the API"
-    throw makeBackendError(
-      `Could not reach the DebugAI API at ${config.apiBase}: ${(err as Error)?.message ?? String(err)}`,
-      0,
-    );
+
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      if (controller.signal.aborted) throw timedOut();
+      if (!res.ok) text = '';
+      else throw makeBackendError(
+        `The DebugAI API at ${config.apiBase} stopped answering part way through: ${(err as Error)?.message ?? String(err)}`,
+        502,
+      );
+    }
+
+    if (!res.ok) {
+      const retryAfter = Number(res.headers.get('retry-after') ?? 0);
+      throw makeBackendError(text || res.statusText, res.status, retryAfter);
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      // A captive portal or a proxy's own page, answering 200 in the API's
+      // place. Said as that, not as the parser's complaint about a `<`.
+      throw makeBackendError(
+        `${config.apiBase} answered with something that is not a DebugAI response ` +
+        '(not JSON). A proxy or a sign-in page may be answering in its place',
+        502,
+      );
+    }
   } finally {
     clearTimeout(timer);
   }
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    const retryAfter = Number(res.headers.get('retry-after') ?? 0);
-    throw makeBackendError(text || res.statusText, res.status, retryAfter);
-  }
-
-  return res.json() as Promise<T>;
 }
 
 export async function callDebugBackend(
