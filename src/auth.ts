@@ -13,11 +13,12 @@
 //     to read out. The human approves in a browser; the agent retries; the
 //     second call finds the key and does the real work. Signup happens inside
 //     the conversation instead of in a config file the user never opens.
-import { loadFileConfig, writeFileConfig } from './config.js';
+import { configPath, loadFileConfig, writeFileConfig } from './config.js';
 import {
   DeviceLinkError,
   pollDeviceLink,
   startDeviceLink,
+  type DeviceLinkPoll,
   type DeviceLinkStart,
 } from './deviceLink.js';
 
@@ -28,6 +29,8 @@ export interface AuthProviderOptions {
   /** Injected in tests. */
   now?: () => number;
   fetchImpl?: typeof fetch;
+  /** Where a note for the person running the server goes. stderr by default. */
+  warn?: (msg: string) => void;
 }
 
 export type EnsureAuth =
@@ -42,6 +45,17 @@ export class AuthProvider {
   private pending: DeviceLinkStart | null = null;
   private pendingStartedAt = 0;
   private lastPollAt = 0;
+  /**
+   * A key this process was handed and could not write down.
+   *
+   * The API delivers a key once: the code dies the moment the key goes out.
+   * So when the config file cannot be written (a read-only home, a sandboxed
+   * agent), dropping the key meant the next call found the code expired and
+   * minted another, and the user was asked to confirm a fresh code after every
+   * confirmation, for good. Held here it works until the process exits. Set
+   * only when the write failed, so `logout` still takes effect at once.
+   */
+  private sessionKey = '';
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => number;
 
@@ -54,7 +68,7 @@ export class AuthProvider {
   currentKey(): string {
     const envKey = (this.env.DEBUGAI_API_KEY ?? '').trim();
     if (envKey) return envKey;
-    return loadFileConfig(this.env, () => {}).apiKey ?? '';
+    return loadFileConfig(this.env, () => {}).apiKey || this.sessionKey;
   }
 
   /**
@@ -71,21 +85,31 @@ export class AuthProvider {
     if (this.pending && this.now() - this.pendingStartedAt < this.pending.expiresIn * 1000) {
       if (this.now() - this.lastPollAt >= MIN_POLL_GAP_MS) {
         this.lastPollAt = this.now();
+        let result: DeviceLinkPoll | null = null;
         try {
-          const result = await pollDeviceLink(this.pending.deviceCode, {
+          result = await pollDeviceLink(this.pending.deviceCode, {
             apiBase: this.opts.apiBase,
             fetchImpl: this.opts.fetchImpl,
           });
-          if (result.status === 'linked') {
-            writeFileConfig({ apiKey: result.apiKey }, this.env);
-            this.pending = null;
-            return { ok: true, apiKey: result.apiKey };
-          }
-          if (result.status === 'expired' || result.status === 'denied') {
-            this.pending = null; // fall through and mint a fresh code below
-          }
         } catch {
           // Network hiccup mid-link: keep the pending code, repeat instructions.
+        }
+        if (result?.status === 'linked') {
+          this.pending = null;
+          try {
+            writeFileConfig({ apiKey: result.apiKey }, this.env);
+          } catch (err) {
+            this.sessionKey = result.apiKey;
+            (this.opts.warn ?? ((m: string) => console.error(m)))(
+              `[debugai-mcp] signed in, but the key could not be saved to ${configPath(this.env)} ` +
+              `(${(err as Error)?.message ?? String(err)}). It works until this server stops; ` +
+              'the next one will ask to sign in again.',
+            );
+          }
+          return { ok: true, apiKey: result.apiKey };
+        }
+        if (result?.status === 'expired' || result?.status === 'denied') {
+          this.pending = null; // fall through and mint a fresh code below
         }
       }
       if (this.pending) return this.pendingResult(this.pending);

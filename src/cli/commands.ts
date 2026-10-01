@@ -116,6 +116,23 @@ function describeResult(r: InstallResult): void {
 
 // ── login ────────────────────────────────────────────────────────────────────
 
+/**
+ * Writes the key and answers where, or says why it could not and answers null.
+ * A sign-in is delivered once, so a home directory that cannot be written used
+ * to end `login` in a stack trace with the key gone.
+ */
+function storeKey(apiKey: string, env: NodeJS.ProcessEnv): string | null {
+  try {
+    return writeFileConfig({ apiKey }, env);
+  } catch (err) {
+    say();
+    say(`${FAIL()} Signed in, but the key could not be saved to ${configPath(env)}: ${(err as Error)?.message ?? String(err)}`);
+    say(`  ${dim('Nothing was stored. Make that folder writable, or point DEBUGAI_CONFIG_PATH at a file')}`);
+    say(`  ${dim('you can write, and run "debugai-mcp login" again.')}`);
+    return null;
+  }
+}
+
 export async function cmdLogin(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
   const { apiBase } = resolveSettings(DEFAULT_API_BASE, env, () => {});
   const manualKey = flagValue(argv, 'key');
@@ -127,7 +144,8 @@ export async function cmdLogin(argv: string[], env: NodeJS.ProcessEnv = process.
       say(`${FAIL()} That does not look like a DebugAI key. They start with ${bold('dbg_')}.`);
       return 1;
     }
-    const path = writeFileConfig({ apiKey: manualKey }, env);
+    const path = storeKey(manualKey, env);
+    if (!path) return 1;
     const info = await verifyKey(apiBase, manualKey);
     say(`${OK()} Key stored in ${path}${info?.email ? ` for ${bold(info.email)}` : ''}.`);
     if (!info) say(`${WARN()} ${yellow('Could not verify it against the API just now. Run "debugai-mcp doctor" later.')}`);
@@ -167,10 +185,20 @@ export async function cmdLogin(argv: string[], env: NodeJS.ProcessEnv = process.
   say();
   say(dim(`  Waiting… the code expires in ${Math.round(start.expiresIn / 60)} minutes. Ctrl-C to cancel.`));
 
-  const result = await waitForDeviceLink(start, { apiBase });
+  let result;
+  try {
+    result = await waitForDeviceLink(start, { apiBase });
+  } catch (err) {
+    const detail = err instanceof DeviceLinkError ? err.message : String(err);
+    say();
+    say(`${FAIL()} Lost contact with DebugAI while waiting: ${detail}`);
+    say(`  ${dim('Nothing was stored. Run "debugai-mcp login" again once the connection is back.')}`);
+    return 1;
+  }
 
   if (result.status === 'linked') {
-    const path = writeFileConfig({ apiKey: result.apiKey }, env);
+    const path = storeKey(result.apiKey, env);
+    if (!path) return 1;
     say();
     say(`${OK()} Signed in${result.email ? ` as ${bold(result.email)}` : ''}${result.tier ? ` (${result.tier} tier)` : ''}.`);
     say(`  ${dim(`Key saved to ${path}. Every MCP client on this machine reads it.`)}`);

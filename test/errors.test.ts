@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { mapBackendErrorToToolResult } from '../src/errors.js';
 
@@ -11,13 +12,30 @@ function textOf(result: ReturnType<typeof mapBackendErrorToToolResult>): string 
 }
 
 describe('mapBackendErrorToToolResult', () => {
-  it('401: points to the dashboard and the DEBUGAI_API_KEY env var, never VS Code', () => {
+  it('401: sends the user to sign in again, never to write the key into a client config', () => {
+    // It used to say "set it as the DEBUGAI_API_KEY environment variable in
+    // their MCP client config (the "env" block) ... then restart the MCP
+    // client". `doctor` warns about exactly that block (a key in plain text in
+    // a file that gets committed, which outranks the stored one after a
+    // rotation), `install` never writes one, and the server re-reads the stored
+    // key on every call, so no restart is needed either.
     const result = mapBackendErrorToToolResult(backendError(401));
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain('debugai.io/dashboard');
-    expect(textOf(result)).toContain('DEBUGAI_API_KEY');
-    expect(textOf(result)).not.toMatch(/VS Code|command palette/i);
+    const text = textOf(result);
+    expect(text).toContain('npx -y @debugai/mcp login --force');
+    expect(text).toContain('npx -y @debugai/mcp doctor');
+    expect(text).toContain('debugai.io/dashboard');
+    expect(text).toContain('no client restart is needed');
+    expect(text).not.toMatch(/"env" block|environment variable in their MCP client config/);
+    expect(text).not.toMatch(/VS Code|command palette/i);
     expect(result.structuredContent).toMatchObject({ error_type: 'auth_failed', retryable: false });
+  });
+
+  it('401: the two commands it names are ones the CLI has', () => {
+    const cli = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+    expect(cli).toMatch(/case 'login':/);
+    expect(cli).toMatch(/case 'doctor':/);
+    expect(readFileSync(new URL('../src/cli/commands.ts', import.meta.url), 'utf8')).toContain("flag(argv, 'force')");
   });
 
   it('402: surfaces tier, limit, reset, upgrade URL from the response body and forbids retry', () => {

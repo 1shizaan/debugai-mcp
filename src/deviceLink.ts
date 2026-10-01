@@ -85,6 +85,15 @@ async function postJson(
   }
 }
 
+/**
+ * An address a browser can be sent to: http or https, and nothing else. What
+ * the server names here is opened on the user's machine and read out to them,
+ * so it is checked as an address rather than passed along as a string.
+ */
+export function isWebAddress(v: unknown): v is string {
+  return typeof v === 'string' && /^https?:\/\/\S+$/i.test(v.trim());
+}
+
 export async function startDeviceLink(opts: DeviceLinkOptions): Promise<DeviceLinkStart> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const { status, json } = await postJson(
@@ -94,20 +103,28 @@ export async function startDeviceLink(opts: DeviceLinkOptions): Promise<DeviceLi
     fetchImpl,
   );
 
-  if (status !== 200 || !json?.device_code || !json?.user_code) {
+  // The address is as much a part of the link as the two codes. Without it
+  // String() below produced the word "undefined", and the agent was handed
+  // "Open undefined" to read out (the editor's client had the same hole, X28).
+  if (status !== 200 || !json?.device_code || !json?.user_code || !isWebAddress(json?.verification_uri)) {
     throw new DeviceLinkError(
       json?.error
         ? `DebugAI refused to start the link: ${json.error}`
-        : `DebugAI returned HTTP ${status} when starting the link`,
+        : status === 200
+          ? 'DebugAI returned an incomplete sign-in response'
+          : `DebugAI returned HTTP ${status} when starting the link`,
       status,
     );
   }
 
+  const address = String(json.verification_uri).trim();
   return {
     deviceCode:              String(json.device_code),
     userCode:                String(json.user_code),
-    verificationUri:         String(json.verification_uri),
-    verificationUriComplete: String(json.verification_uri_complete ?? json.verification_uri),
+    verificationUri:         address,
+    verificationUriComplete: isWebAddress(json.verification_uri_complete)
+      ? String(json.verification_uri_complete).trim()
+      : address,
     expiresIn:               Number(json.expires_in) || 600,
     interval:                Number(json.interval) || 5,
   };
@@ -159,6 +176,18 @@ export interface WaitOptions extends DeviceLinkOptions {
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Polls in a row that may fail before the wait gives up.
+ *
+ * One failed poll used to end it: a 502 while the API redeployed, or a dropped
+ * connection, threw out of `login` as an unhandled rejection - a stack trace in
+ * the terminal, and no key - while the human was half way through confirming
+ * the code in a browser (measured 2026-10-01). A blip is not a dead code. A run
+ * of them is an API that is not there, and waiting ten minutes to say "the
+ * code expired" would be the wrong story.
+ */
+export const MAX_FAILED_POLLS = 5;
+
+/**
  * Blocks until the human approves, denies, or the code expires. Honors the
  * server's interval and backs off when told to (`slow_down`) — a client that
  * ignores that is how a device flow turns into a self-inflicted DoS.
@@ -171,12 +200,20 @@ export async function waitForDeviceLink(
   const now = opts.now ?? Date.now;
   const deadline = now() + start.expiresIn * 1000;
   let interval = Math.max(1, start.interval);
+  let failed = 0;
 
   for (;;) {
     if (now() >= deadline) return { status: 'expired' };
     await sleep(interval * 1000);
 
-    const result = await pollDeviceLink(start.deviceCode, opts);
+    let result: DeviceLinkPoll;
+    try {
+      result = await pollDeviceLink(start.deviceCode, opts);
+      failed = 0;
+    } catch (err) {
+      if (++failed >= MAX_FAILED_POLLS) throw err;
+      continue;
+    }
     if (result.status === 'slow_down') {
       interval = Math.max(interval + 5, result.interval);
       continue;

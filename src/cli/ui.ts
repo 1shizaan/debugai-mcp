@@ -34,29 +34,59 @@ export function heading(text: string): void {
 }
 
 /**
+ * The programs that open `url` in a browser here, in the order to try them, or
+ * none when there is clearly no browser (headless Linux, CI) or `url` is not a
+ * web address.
+ *
+ * Never a shell. Windows used `cmd /c start "" <url>`, which hands the address
+ * to cmd.exe's parser, and there `&` ends a command: the sign-in address is
+ * `...?code=ABCD-2345&src=mcp`, so the browser was sent `...?code=ABCD-2345`
+ * and cmd then ran `src=mcp` as a program. Measured on Windows 2026-10-01:
+ * `'src' is not recognized as an internal or external command`. The campaign
+ * tag never reached the site from any Windows sign-in, and a string from a
+ * network response was being executed as a command line. rundll32 is given
+ * the address as one argument and no parser sits in between.
+ */
+export function browserCommands(
+  url: string,
+  os: NodeJS.Platform = platform(),
+  env: NodeJS.ProcessEnv = process.env,
+): Array<[string, string[]]> {
+  if (!/^https?:\/\/\S+$/i.test(url)) return [];
+  const headlessLinux = os === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY && !env.WSL_DISTRO_NAME;
+  if (env.CI || headlessLinux) return [];
+
+  if (os === 'darwin') return [['open', [url]]];
+  if (os === 'win32') return [['rundll32', ['url.dll,FileProtocolHandler', url]]];
+  // WSL has Windows' browser and usually no xdg-open of its own.
+  if (env.WSL_DISTRO_NAME) {
+    return [['rundll32.exe', ['url.dll,FileProtocolHandler', url]], ['xdg-open', [url]]];
+  }
+  return [['xdg-open', [url]]];
+}
+
+/**
  * Opens a URL in the user's browser, best effort. Returns false when there is
- * clearly no browser to open (headless Linux, CI) so the caller prints the URL
- * instead of pretending something happened.
+ * clearly no browser to open, so the caller prints the URL instead of
+ * pretending something happened.
  */
 export function openBrowser(url: string): boolean {
-  const os = platform();
-  const headlessLinux =
-    os === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY && !process.env.WSL_DISTRO_NAME;
-  if (process.env.CI || headlessLinux) return false;
+  const candidates = browserCommands(url);
+  if (!candidates.length) return false;
 
-  const [cmd, args] =
-    os === 'darwin' ? ['open', [url]] :
-    os === 'win32'  ? ['cmd', ['/c', 'start', '', url]] :
-                      ['xdg-open', [url]];
-
-  try {
-    const child = spawn(cmd, args as string[], { stdio: 'ignore', detached: true });
-    child.on('error', () => { /* no browser handler — the URL is printed anyway */ });
-    child.unref();
-    return true;
-  } catch {
-    return false;
-  }
+  const launch = (i: number): boolean => {
+    const [cmd, args] = candidates[i];
+    try {
+      const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+      // Not there: try the next one. The URL is printed either way.
+      child.on('error', () => { if (i + 1 < candidates.length) launch(i + 1); });
+      child.unref();
+      return true;
+    } catch {
+      return i + 1 < candidates.length ? launch(i + 1) : false;
+    }
+  };
+  return launch(0);
 }
 
 /** Big enough to read across a room, small enough to fit a narrow terminal. */

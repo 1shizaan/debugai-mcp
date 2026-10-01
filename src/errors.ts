@@ -26,10 +26,13 @@ export function mapBackendErrorToToolResult(err: unknown): CallToolResult {
       content: [{
         type: 'text',
         text:
-          'DebugAI authentication failed: API key missing, invalid, or expired. ' +
-          `Tell the user to get their API key at ${DASHBOARD_URL} and set it as the ` +
-          'DEBUGAI_API_KEY environment variable in their MCP client config (the "env" block ' +
-          'for the debugai server entry), then restart the MCP client and retry.',
+          'DebugAI authentication failed: the API key this server has was rejected ' +
+          '(rotated, revoked, or mistyped). Tell the user to run this in a terminal, which ' +
+          'signs them in through the browser and replaces the stored key:\n\n' +
+          '    npx -y @debugai/mcp login --force\n\n' +
+          'Then retry this call; no client restart is needed. If it is refused again, ' +
+          '`npx -y @debugai/mcp doctor` shows where an old key is still written into a ' +
+          `client config. Their account and key are at ${DASHBOARD_URL}.`,
       }],
       structuredContent: {
         error_type: 'auth_failed',
