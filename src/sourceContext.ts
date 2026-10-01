@@ -37,7 +37,8 @@
  *     walk out
  *   - secret-shaped names (.env, *.pem, id_rsa, *.key) are never read even
  *     when they sit inside the root
- *   - source extensions only, MAX_FILES files, MAX_BYTES each
+ *   - source extensions only, MAX_FILES files, none over MAX_BYTES, and never
+ *     more characters in total than the API accepts
  *
  * Frame ORDERING is duplicated from apps/extension/src/errorPaths.ts on
  * purpose: this package publishes to npm standalone and cannot import from the
@@ -46,13 +47,26 @@
  */
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, basename, extname } from 'node:path';
+import { API_CODE_MAX_CHARS, fitCodeWindow } from './fitCodeWindow.js';
 
 /** Files read per request. Three frames is a cause, a caller, and one spare. */
 export const MAX_FILES = 3;
-/** Per file. Larger than this and the window, not the file, is what we send. */
-export const MAX_BYTES = 256_000;
+/**
+ * Per file. Larger than this and the file is not read: at that size it is a
+ * bundle or a data dump, and the read holds all of it in memory to send eighty
+ * lines. It was 256,000 and it CUT rather than refused, before the window was
+ * taken: the cut fell mid-line, and a failing line past it (line 4,500 of an
+ * ordinary 9,000-line module) was sent as one empty line. What is sent is
+ * bounded by the window and by the API's own limit, not by this.
+ */
+export const MAX_BYTES = 2_000_000;
 /** Lines of context either side of the failing line. */
 export const WINDOW = 40;
+/**
+ * Room kept for a block's header beyond its label: the dashes, the line, and
+ * the range note `formatSnippet` writes. The longest it can be is under 80.
+ */
+const HEADER_ROOM = 96;
 
 const SOURCE_EXT = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
@@ -342,15 +356,19 @@ function windowAround(
   text: string,
   line: number | null,
 ): { text: string; windowed: boolean; start: number } {
-  if (line === null) {
-    const lines = text.split('\n');
-    if (lines.length <= WINDOW * 2 + 1) return { text, windowed: false, start: 1 };
-    return { text: lines.slice(0, WINDOW * 2 + 1).join('\n'), windowed: true, start: 1 };
-  }
   const lines = text.split('\n');
   if (lines.length <= WINDOW * 2 + 1) return { text, windowed: false, start: 1 };
-  const start = Math.max(0, line - 1 - WINDOW);
-  const end = Math.min(lines.length, line + WINDOW);
+  if (line === null) {
+    return { text: lines.slice(0, WINDOW * 2 + 1).join('\n'), windowed: true, start: 1 };
+  }
+  // A trace can name a line the file no longer has: it was edited since the
+  // failure, or the trace came from another build. The window used to start
+  // past the end, so what went out was one empty line under a header claiming
+  // `lines 7960-7960`. The end of the file is sent instead, and its real range
+  // beside the line the trace named is what says the two disagree.
+  const at = Math.min(Math.max(line, 1), lines.length);
+  const start = Math.max(0, at - 1 - WINDOW);
+  const end = Math.min(lines.length, at + WINDOW);
   return { text: lines.slice(start, end).join('\n'), windowed: true, start: start + 1 };
 }
 
@@ -361,10 +379,8 @@ function readOne(frame: Frame, root: string, cwd: string): ResolvedFile | null {
     try {
       const st = statSync(candidate);
       if (!st.isFile()) continue;
-      const raw = st.size > MAX_BYTES
-        ? readFileSync(candidate, 'utf8').slice(0, MAX_BYTES)
-        : readFileSync(candidate, 'utf8');
-      const win = windowAround(raw, frame.line);
+      if (st.size > MAX_BYTES) continue;
+      const win = windowAround(readFileSync(candidate, 'utf8'), frame.line);
       const real = realpathSync(candidate);
       const rel = relative(realpathSync(root), real);
       return {
@@ -379,6 +395,32 @@ function readOne(frame: Frame, root: string, cwd: string): ResolvedFile | null {
     }
   }
   return null;
+}
+
+/**
+ * One file, cut to the characters left in the request.
+ *
+ * WINDOW is a count of lines and the API's limit on `code_snippet` is a length
+ * (API_CODE_MAX_CHARS). A file of a few lines is sent whole, and a window is
+ * 81 lines of any width, so one long line was enough to send
+ * 62,526 characters and have the whole call refused with a 400 telling the
+ * agent to change arguments it never passed (2026-10-01). The cut keeps whole
+ * lines around the failing one and says so: `windowed` and `start` are what
+ * the header's line range is written from, and the engine numbers the code by
+ * that range.
+ *
+ * null when not even the failing line fits. A file that cannot be shown
+ * honestly is left out, and the frames after it get their turn.
+ */
+function fitToBudget(file: ResolvedFile, budget: number): ResolvedFile | null {
+  const room = budget - file.label.length - HEADER_ROOM;
+  if (room <= 0) return null;
+  if (file.text.length <= room) return file;
+  const first = (file.start ?? 1) - 1;
+  const at = file.line !== null ? file.line - 1 : first;
+  const fit = fitCodeWindow(file.text.split('\n'), first, at, '\n', room);
+  if (!fit.text) return null;
+  return { ...file, text: fit.text, start: fit.startLine, windowed: true };
 }
 
 /**
@@ -412,12 +454,19 @@ export function resolveSourceContext(opts: {
 
     const files: ResolvedFile[] = [];
     const takenLabels = new Set<string>();
+    // What the API will still take. The innermost frame is read first, so it
+    // is the one that gets the room when there is not enough for all three.
+    let budget = API_CODE_MAX_CHARS;
     for (const frame of frames) {
       if (files.length >= maxFiles) break;
       const got = readOne(frame, opts.root, cwd);
       if (got && !takenLabels.has(got.label)) {
         takenLabels.add(got.label);
-        files.push(got);
+        const fitted = fitToBudget(got, budget);
+        if (!fitted) continue;
+        files.push(fitted);
+        // The block as it will be written, and the blank line between blocks.
+        budget -= formatSnippet([fitted]).length + 2;
       }
     }
 

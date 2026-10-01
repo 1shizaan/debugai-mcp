@@ -50,6 +50,66 @@ describe('mapBackendErrorToToolResult', () => {
     });
   });
 
+  it('429 with no Retry-After: the cooldown is 60s, never 0', () => {
+    // backend.ts reports an absent header as 0, so `?? 60` never applied and
+    // "Retry after 0 seconds" went to the agent.
+    for (const absent of [0, NaN, -5]) {
+      const result = mapBackendErrorToToolResult(backendError(429, '{"error":"Too many requests. Please slow down."}', absent));
+      expect(textOf(result)).toContain('Retry after 60 seconds');
+      expect(result.structuredContent).toMatchObject({ error_type: 'rate_limited', retry_after_seconds: 60, retryable: true });
+    }
+  });
+
+  it('429: offers no upgrade for a limit no plan raises', () => {
+    expect(textOf(mapBackendErrorToToolResult(backendError(429, 'slow down', 900)))).not.toMatch(/upgrade|pricing|dashboard/i);
+  });
+
+  // A paid account past PRO_ABUSE_CEILING is a 429 too, with a body naming when
+  // it resets and no Retry-After (apps/api/src/usageGuard.ts). Read as a burst
+  // it was "transient. Retry after 0 seconds", retryable.
+  describe('429 with resets_at: the monthly ceiling', () => {
+    const ceiling = JSON.stringify({
+      error: 'Monthly usage ceiling reached. Contact support if this is legitimate.',
+      tier: 'pro',
+      resets_at: 'monthly (1st, UTC)',
+    });
+
+    it('forbids retry and is marked not retryable', () => {
+      const result = mapBackendErrorToToolResult(backendError(429, ceiling, 0));
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toEqual({
+        error_type: 'monthly_ceiling', tier: 'pro', resets_at: 'monthly (1st, UTC)', retryable: false,
+      });
+      expect(textOf(result)).toContain('do NOT retry');
+      expect(textOf(result)).not.toMatch(/transient\)|Retry after/);
+    });
+
+    it('names the account, the reset and where to reach us, and sells nothing', () => {
+      const result = mapBackendErrorToToolResult(backendError(429, ceiling, 0));
+      expect(textOf(result)).toContain('monthly usage ceiling reached for this pro account');
+      expect(textOf(result)).toContain('1st of the month (UTC)');
+      expect(textOf(result)).toContain('https://debugai.io/dashboard');
+      expect(textOf(result)).not.toMatch(/upgrade|pricing/i);
+    });
+
+    it('stays a ceiling even if a Retry-After came with it', () => {
+      expect(mapBackendErrorToToolResult(backendError(429, ceiling, 30)).structuredContent)
+        .toMatchObject({ error_type: 'monthly_ceiling', retryable: false });
+    });
+
+    it('does not need a tier to say it', () => {
+      const result = mapBackendErrorToToolResult(backendError(429, '{"resets_at":"monthly (1st, UTC)","tier":7}', 0));
+      expect(result.structuredContent).toMatchObject({ error_type: 'monthly_ceiling', tier: 'paid' });
+    });
+
+    it('a body without resets_at is a burst, whatever else it holds', () => {
+      for (const body of ['slow down', '', 'null', '"text"', '[]', '{"tier":"pro"}', '{"resets_at":5}', '{"error":"Too many requests. Please slow down."}']) {
+        expect(mapBackendErrorToToolResult(backendError(429, body, 12)).structuredContent, body)
+          .toMatchObject({ error_type: 'rate_limited', retry_after_seconds: 12, retryable: true });
+      }
+    });
+  });
+
   it('503/504: engine unavailable, retryable', () => {
     for (const status of [503, 504]) {
       const result = mapBackendErrorToToolResult(backendError(status));

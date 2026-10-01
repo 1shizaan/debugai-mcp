@@ -97,19 +97,50 @@ export function mapBackendErrorToToolResult(err: unknown): CallToolResult {
     };
   }
 
+  // 429 is two different things. A burst (express-rate-limit) carries a
+  // Retry-After and clears by itself. A paid account past its monthly ceiling
+  // does not: the API's body names when it resets (`resets_at`, written in
+  // apps/api/src/usageGuard.ts) and sends no Retry-After. Read as a burst it
+  // said "transient. Retry after 0 seconds", retryable, and offered an upgrade
+  // to an account that already pays, so an agent had every reason to call
+  // again at once, for the rest of the month.
   if (status === 429) {
+    const ceiling = tryParseJson(String(message));
+    if (typeof ceiling?.resets_at === 'string') {
+      const tier = typeof ceiling.tier === 'string' && ceiling.tier ? ceiling.tier : 'paid';
+      return {
+        isError: true,
+        content: [{
+          type: 'text',
+          text:
+            `DebugAI monthly usage ceiling reached for this ${tier} account. It resets on the 1st of the month (UTC). ` +
+            'IMPORTANT: This is NOT a transient rate limit — do NOT retry this call; it is refused the same way until then. ' +
+            `Tell the user. If this usage is legitimate, they can message DebugAI from ${DASHBOARD_URL}.`,
+        }],
+        structuredContent: {
+          error_type: 'monthly_ceiling',
+          tier,
+          resets_at: ceiling.resets_at,
+          retryable: false,
+        },
+      };
+    }
+    // The backend reports a missing Retry-After as 0, never as undefined, so
+    // the `?? 60` above does not catch it. Zero seconds is not a cooldown.
+    const wait = retry > 0 ? retry : 60;
     return {
       isError: true,
       content: [{
         type: 'text',
         text:
-          `DebugAI rate limit hit (transient). Retry after ${retry} seconds. ` +
-          `Do NOT retry this call immediately — inform the user and wait for the cooldown. ` +
-          `Upgrade for higher limits: ${DASHBOARD_URL}`,
+          `DebugAI rate limit hit (transient). Retry after ${wait} seconds. ` +
+          // No upgrade link. The limiters behind this (one per network
+          // address, one per account on lookups) are not raised by any plan.
+          'Do NOT retry this call immediately — inform the user and wait for the cooldown.',
       }],
       structuredContent: {
         error_type: 'rate_limited',
-        retry_after_seconds: retry,
+        retry_after_seconds: wait,
         retryable: true,
       },
     };
