@@ -44,7 +44,11 @@ export function loadFileConfig(
     return {}; // no config file is the normal case — stay silent
   }
   try {
-    const parsed: unknown = JSON.parse(raw);
+    // A byte-order mark is not JSON. A key file saved with one (Notepad, or
+    // PowerShell's `Set-Content -Encoding UTF8`) read as malformed: the server
+    // asked a signed-in user to sign in, and the next write started the file
+    // clean, dropping the api_base beside the key.
+    const parsed: unknown = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       warn(`[debugai-mcp] ignoring ${path}: expected a JSON object`);
       return {};

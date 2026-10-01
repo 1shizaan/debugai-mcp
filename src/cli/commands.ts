@@ -83,7 +83,7 @@ function clientLabel(): string {
   return `${hostname()} (${platform()})`;
 }
 
-function describeResult(r: InstallResult): void {
+function describeResult(r: InstallResult, removing = false): void {
   const name = bold(r.client.label);
   switch (r.action) {
     case 'wrote':
@@ -94,10 +94,15 @@ function describeResult(r: InstallResult): void {
       say(`      ${dim(`next: ${r.client.afterInstall}`)}`);
       break;
     case 'unchanged':
-      say(`  ${OK()} ${name} — already configured, nothing to change`);
+      // The same word for two opposite states: on a removal it said "already
+      // configured" about every client DebugAI had never been in.
+      say(removing
+        ? `  ${INFO()} ${name} — no DebugAI entry, nothing to remove`
+        : `  ${OK()} ${name} — already configured, nothing to change`);
       break;
     case 'removed':
       say(`  ${OK()} ${name} — entry removed from ${dim(r.path ?? '')}`);
+      for (const dir of r.removedProjects ?? []) say(`      ${dim(`also its entry for ${dir}`)}`);
       if (r.backupPath) say(`      ${dim(`backup: ${r.backupPath}`)}`);
       break;
     case 'skipped':
@@ -248,7 +253,16 @@ export async function cmdStatus(_argv: string[], env: NodeJS.ProcessEnv = proces
 
 // ── install / uninstall ──────────────────────────────────────────────────────
 
-function selectClients(argv: string[], env: NodeJS.ProcessEnv): { clients: McpClient[]; explicit: boolean } {
+/**
+ * Which clients a command acts on.
+ *
+ * `optIn` keeps `install` out of VS Code, where the extension registers the
+ * server itself. It is a reason not to ADD an entry and no reason to leave one:
+ * `uninstall` used to skip VS Code for it, so an entry added with
+ * `--client=vscode` survived "remove DebugAI from every client config".
+ */
+function selectClients(argv: string[], env: NodeJS.ProcessEnv, removing = false): { clients: McpClient[]; explicit: boolean } {
+  const wanted = (c: McpClient): boolean => removing || !c.optIn;
   const raw = flagValue(argv, 'client');
   if (raw) {
     const ids = raw.split(',').map((s) => s.trim()).filter(Boolean);
@@ -260,8 +274,8 @@ function selectClients(argv: string[], env: NodeJS.ProcessEnv): { clients: McpCl
     }
     return { clients, explicit: true };
   }
-  if (flag(argv, 'all')) return { clients: knownClients(env).filter((c) => !c.optIn), explicit: false };
-  return { clients: detectedClients(env).filter((c) => !c.optIn), explicit: false };
+  if (flag(argv, 'all')) return { clients: knownClients(env).filter(wanted), explicit: false };
+  return { clients: detectedClients(env).filter(wanted), explicit: false };
 }
 
 function listClients(env: NodeJS.ProcessEnv): void {
@@ -287,7 +301,7 @@ export function cmdInstall(argv: string[], env: NodeJS.ProcessEnv = process.env)
 
   const dryRun = flag(argv, 'dry-run') || flag(argv, 'print');
   const remove = flag(argv, 'remove');
-  const { clients, explicit } = selectClients(argv, env);
+  const { clients, explicit } = selectClients(argv, env, remove);
 
   if (!clients.length) {
     say(`${WARN()} No MCP clients detected on this machine.`);
@@ -298,7 +312,7 @@ export function cmdInstall(argv: string[], env: NodeJS.ProcessEnv = process.env)
 
   heading(remove ? 'Removing DebugAI from MCP clients' : 'Installing DebugAI into MCP clients');
   const results = clients.map((c) => applyToClient(c, { dryRun, remove }));
-  results.forEach(describeResult);
+  results.forEach((r) => describeResult(r, remove));
 
   if (dryRun) {
     for (const r of results.filter((x) => x.preview)) {
@@ -389,6 +403,15 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
   }
   for (const c of detected) {
     const site = findInstall(c);
+    // A client `install` deliberately stays out of is not one to be told to
+    // install into. VS Code is on every machine doctor runs on, so this warned
+    // nearly everybody to add an entry the extension already provides - and
+    // `setup` ends by running doctor, so it was the last thing a new user read.
+    if (c.optIn && !site) {
+      say(`  ${INFO()} ${c.label} — no entry here, which is right with the DebugAI extension installed`);
+      if (c.note) say(`      ${dim(c.note)}`);
+      continue;
+    }
     if (site?.scope === 'user') {
       pass(`${c.label} — debugai configured`, c.configPath ?? undefined);
     } else if (site?.scope === 'project') {

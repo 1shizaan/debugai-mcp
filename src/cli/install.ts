@@ -9,7 +9,8 @@
 //     so a crash mid-write cannot leave a truncated config behind
 //   - a file we cannot parse is left ALONE and reported, never "fixed"
 //   - running twice is a no-op ("unchanged"), never a duplicate entry
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+//   - the file keeps what it was: its permissions, and being a symlink
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseJsonc } from './jsonc.js';
 import { SERVER_NAME, serverEntry, serversKey, type McpClient } from './clients.js';
@@ -26,6 +27,8 @@ export interface InstallResult {
   error?: string;
   /** The exact JSON we would write — used by --dry-run and by failure output. */
   preview?: string;
+  /** Directories whose own (Claude Code local-scope) entry a removal took out. */
+  removedProjects?: string[];
 }
 
 function backupPath(path: string): string {
@@ -33,12 +36,39 @@ function backupPath(path: string): string {
   return `${path}.debugai-backup-${stamp}`;
 }
 
+/**
+ * Replaces the file's contents and nothing else about it.
+ *
+ * A rename swaps in a NEW file, and until 2026-10-01 that new file was whatever
+ * `writeFileSync` makes by default. Two things about the old one were lost:
+ *
+ *   its permissions   these configs hold other servers' tokens in `env` blocks.
+ *                     One kept at 0600 came back 0644: readable by every user
+ *                     on the machine, after an install that touched one key.
+ *   being a symlink   a config kept in a dotfiles repository is a link into it.
+ *                     The link was replaced by a regular file, so the repository
+ *                     copy went stale and the next `stow` or `chezmoi apply`
+ *                     put the old config back, without the entry.
+ *
+ * So the write goes to where the path really points, and the temporary file
+ * takes the old file's mode before it is renamed over it.
+ */
 function writeAtomic(path: string, contents: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, contents, 'utf8');
+  let target = path;
+  let mode: number | undefined;
   try {
-    renameSync(tmp, path);
+    target = realpathSync(path);
+    mode = statSync(target).mode & 0o777;
+  } catch { /* nothing there yet: a new file, with the default mode */ }
+
+  mkdirSync(dirname(target), { recursive: true });
+  const tmp = `${target}.tmp-${process.pid}`;
+  writeFileSync(tmp, contents, mode === undefined ? 'utf8' : { encoding: 'utf8', mode });
+  try {
+    if (mode !== undefined) {
+      try { chmodSync(tmp, mode); } catch { /* a filesystem with no modes */ }   // umask can defeat the mode above
+    }
+    renameSync(tmp, target);
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* ignore */ }
     throw err;
@@ -112,15 +142,38 @@ export function applyToClient(client: McpClient, opts: InstallOptions = {}): Ins
   // key, the new one does not, and a server that starts without one asks the
   // agent to sign in on its first call. Harmless, but surprising if unannounced.
   const droppedKey = !opts.remove && entryCarriesKey(servers[SERVER_NAME]);
+  // Removal takes the entry out of every scope findInstall can see. Claude Code
+  // keeps a second set per directory (`claude mcp add` writes there by
+  // default), and leaving those behind made `uninstall` report nothing to
+  // change about a config that still started the server in that directory.
+  let projects: Record<string, unknown> | undefined;
+  const removedProjects: string[] = [];
   if (opts.remove) {
-    if (!(SERVER_NAME in servers)) return { client, action: 'unchanged', path };
+    const existingProjects = root.projects;
+    if (existingProjects && typeof existingProjects === 'object' && !Array.isArray(existingProjects)) {
+      for (const [dir, cfg] of Object.entries(existingProjects as Record<string, unknown>)) {
+        const scoped = cfg && typeof cfg === 'object' ? (cfg as Record<string, unknown>).mcpServers : undefined;
+        if (!scoped || typeof scoped !== 'object' || Array.isArray(scoped) || !(SERVER_NAME in scoped)) continue;
+        const rest = { ...(scoped as Record<string, unknown>) };
+        delete rest[SERVER_NAME];
+        projects ??= { ...(existingProjects as Record<string, unknown>) };
+        projects[dir] = { ...(cfg as Record<string, unknown>), mcpServers: rest };
+        removedProjects.push(dir);
+      }
+    }
+    const inUserScope = SERVER_NAME in servers;
+    if (!inUserScope && !removedProjects.length) return { client, action: 'unchanged', path };
     delete servers[SERVER_NAME];
   } else {
     if (sameEntry(servers[SERVER_NAME], desired)) return { client, action: 'unchanged', path };
     servers[SERVER_NAME] = desired;
   }
 
-  const nextRoot = { ...root, [key]: servers };
+  // A removal that found nothing in the user scope leaves that key as it was,
+  // absent included: only what was ours is touched.
+  const nextRoot: Record<string, unknown> = { ...root };
+  if (!opts.remove || key in root) nextRoot[key] = servers;
+  if (projects) nextRoot.projects = projects;
   const contents = `${JSON.stringify(nextRoot, null, 2)}\n`;
   const KEY_DROPPED = 'the old entry carried DEBUGAI_API_KEY in plain text; it was not copied. The server ' +
     'now uses the key `debugai-mcp login` stores, so run that if you have not.';
@@ -137,6 +190,7 @@ export function applyToClient(client: McpClient, opts: InstallOptions = {}): Ins
       action: opts.remove ? 'removed' : existed ? 'updated' : 'wrote',
       path,
       preview: contents,
+      removedProjects: removedProjects.length ? removedProjects : undefined,
       warning: [
         hadComments ? 'this file has comments; installing would drop them (a backup is written first)' : undefined,
         droppedKey ? 'the current entry carries DEBUGAI_API_KEY in plain text; installing would not copy it (run `debugai-mcp login` first)' : undefined,
@@ -168,6 +222,7 @@ export function applyToClient(client: McpClient, opts: InstallOptions = {}): Ins
     path,
     backupPath: backup,
     warning,
+    removedProjects: removedProjects.length ? removedProjects : undefined,
   };
 }
 

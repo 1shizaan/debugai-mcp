@@ -80,7 +80,11 @@ export function stripTrailingCommas(text: string): string {
 }
 
 /** Parses JSON or JSONC. Throws the underlying SyntaxError on real malformed input. */
-export function parseJsonc(text: string): ParsedJsonc {
+export function parseJsonc(raw: string): ParsedJsonc {
+  // A byte-order mark is not JSON, and editors on Windows write one. With it
+  // left on, a config that already held our entry "could not be parsed", so
+  // `install` refused the file and `doctor` reported the client as not set up.
+  const text = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
   const trimmed = text.trim();
   if (trimmed === '') return { value: {}, hadComments: false };
 

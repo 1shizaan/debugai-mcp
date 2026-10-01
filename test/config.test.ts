@@ -57,6 +57,16 @@ describe('loadFileConfig', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('expected a JSON object'));
   });
 
+  it('reads a file saved with a byte-order mark', () => {
+    // Notepad and PowerShell's `Set-Content -Encoding UTF8` write one. Read as
+    // malformed, a signed-in user was asked to sign in, and the write that
+    // followed started the file clean and dropped the api_base beside the key.
+    const warn = vi.fn();
+    const env = writeConfig('\uFEFF{"api_key": "dbg_file", "api_base": "https://file.test/api"}');
+    expect(loadFileConfig(env, warn)).toEqual({ apiKey: 'dbg_file', apiBase: 'https://file.test/api' });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('treats empty-string values as absent', () => {
     const env = writeConfig('{"api_key": "", "api_base": "  "}');
     expect(loadFileConfig(env)).toEqual({ apiKey: undefined, apiBase: undefined });

@@ -1,7 +1,7 @@
 // The install path edits files a user's whole editor setup depends on. These
 // tests exist to make "it clobbered my settings" impossible to ship.
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseJsonc, stripJsonComments, stripTrailingCommas } from '../src/cli/jsonc.js';
@@ -48,6 +48,11 @@ describe('jsonc', () => {
 
   it('still throws on genuinely malformed JSON', () => {
     expect(() => parseJsonc('{"a": }')).toThrow();
+  });
+
+  it('reads past a byte-order mark, comments and all', () => {
+    expect(parseJsonc('\uFEFF{ // hi\n "a": 1, }')).toEqual({ value: { a: 1 }, hadComments: true });
+    expect(parseJsonc('\uFEFF').value).toEqual({});
   });
 });
 
@@ -376,5 +381,149 @@ describe('which package spec an installed entry runs', () => {
     expect(installedSpec(broken)).toBeNull();
     // A different package whose name starts the same way is not ours.
     expect(installedSpec(write('i.json', { mcpServers: entry('@debugai/mcp-extras') }))).toBeNull();
+  });
+});
+
+
+// ── The file keeps what it was (2026-10-01) ─────────────────────────────────
+//
+// A rename swaps in a new file, and the new file was whatever writeFileSync
+// makes by default. Measured on the real installer: a config kept at 0600
+// because it holds another server's token came back 0644, and a config that
+// was a symlink into a dotfiles repository came back a regular file with the
+// repository copy untouched.
+describe('rewriting a config changes its contents and nothing else about it', () => {
+  const OTHER = { github: { command: 'npx', args: ['-y', 'gh-mcp'], env: { GITHUB_TOKEN: 'ghp_someone_elses_secret' } } };
+  const posix = platform() !== 'win32';
+
+  // 0664 is the one a umask of 022 would quietly turn into 0644.
+  it.each([0o600, 0o640, 0o644, 0o664])('keeps mode %o on install, update and remove', (mode) => {
+    if (!posix) return;
+    const client = clientAt('mcp.json');
+    writeFileSync(client.configPath!, JSON.stringify({ mcpServers: OTHER }));
+    chmodSync(client.configPath!, mode);
+    const modeNow = () => statSync(client.configPath!).mode & 0o777;
+
+    expect(applyToClient(client).action).toBe('updated');
+    expect(modeNow()).toBe(mode);
+    expect(applyToClient(client, { remove: true }).action).toBe('removed');
+    expect(modeNow()).toBe(mode);
+  });
+
+  it('the backup is no more readable than the file it copies', () => {
+    if (!posix) return;
+    const client = clientAt('mcp.json');
+    writeFileSync(client.configPath!, JSON.stringify({ mcpServers: OTHER }));
+    chmodSync(client.configPath!, 0o600);
+    const result = applyToClient(client);
+    expect(statSync(result.backupPath!).mode & 0o777).toBe(0o600);
+  });
+
+  it('writes through a symlink, so a dotfiles repository keeps owning its file', () => {
+    if (!posix) return;
+    const repo = mkdtempSync(join(tmpdir(), 'debugai-dotfiles-'));
+    try {
+      const real = join(repo, 'mcp.json');
+      writeFileSync(real, JSON.stringify({ mcpServers: OTHER }));
+      const client = clientAt('mcp.json');
+      symlinkSync(real, client.configPath!);
+
+      expect(applyToClient(client).action).toBe('updated');
+      expect(lstatSync(client.configPath!).isSymbolicLink(), 'the link was replaced by a file').toBe(true);
+      const inRepo = JSON.parse(readFileSync(real, 'utf8'));
+      expect(inRepo.mcpServers.debugai).toBeDefined();
+      expect(inRepo.mcpServers.github).toEqual(OTHER.github);
+      // No temp file left beside either end of the link.
+      expect(readdirSync(repo).filter((f) => f.includes('.tmp-'))).toEqual([]);
+      expect(readdirSync(dir).filter((f) => f.includes('.tmp-'))).toEqual([]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('a new file is still created where the path says', () => {
+    const client = clientAt('fresh/mcp.json');
+    expect(applyToClient(client).action).toBe('wrote');
+    expect(lstatSync(client.configPath!).isFile()).toBe(true);
+  });
+
+  it('a config saved with a byte-order mark is read, and found by doctor', () => {
+    const client = clientAt('bom.json');
+    writeFileSync(client.configPath!, '﻿' + JSON.stringify({ mcpServers: { debugai: serverEntry(client), ...OTHER } }));
+    expect(findInstall(client)).toEqual({ scope: 'user' });
+    expect(installedSpec(client)).toBe('@debugai/mcp@latest');
+    expect(applyToClient(client).action).toBe('unchanged');
+    expect(applyToClient(client, { remove: true }).action).toBe('removed');
+    expect(JSON.parse(readFileSync(client.configPath!, 'utf8')).mcpServers).toEqual(OTHER);
+  });
+});
+
+// ── Removal reaches every scope an install can be in ────────────────────────
+describe('remove takes our entry out of every scope findInstall can see', () => {
+  const OURS = { command: 'npx', args: ['-y', '@debugai/mcp'] };
+  const write = (body: unknown): McpClient => {
+    const c = clientAt('claude.json');
+    writeFileSync(c.configPath!, JSON.stringify(body, null, 2));
+    return c;
+  };
+
+  it('a per-directory entry, which `claude mcp add` writes by default', () => {
+    const c = write({
+      theme: 'dark',
+      projects: {
+        '/home/me/thing': { allowedTools: ['x'], mcpServers: { debugai: OURS, other: { command: 'foo' } } },
+        '/home/me/elsewhere': { mcpServers: { other: { command: 'bar' } } },
+      },
+    });
+    const r = applyToClient(c, { remove: true });
+    expect(r.action).toBe('removed');
+    expect(r.removedProjects).toEqual(['/home/me/thing']);
+    expect(findInstall(c)).toBeNull();
+    expect(JSON.parse(readFileSync(c.configPath!, 'utf8'))).toEqual({
+      theme: 'dark',
+      projects: {
+        '/home/me/thing': { allowedTools: ['x'], mcpServers: { other: { command: 'foo' } } },
+        '/home/me/elsewhere': { mcpServers: { other: { command: 'bar' } } },
+      },
+    });
+  });
+
+  it('both scopes at once', () => {
+    const c = write({ mcpServers: { debugai: OURS }, projects: { '/a': { mcpServers: { debugai: OURS } }, '/b': { mcpServers: { debugai: OURS } } } });
+    const r = applyToClient(c, { remove: true });
+    expect(r.removedProjects).toEqual(['/a', '/b']);
+    expect(readFileSync(c.configPath!, 'utf8')).not.toContain('debugai');
+  });
+
+  it('is unchanged, and writes nothing, when neither scope has it', () => {
+    const body = { projects: { '/a': { mcpServers: { other: {} } } } };
+    const c = write(body);
+    const before = readFileSync(c.configPath!, 'utf8');
+    expect(applyToClient(c, { remove: true }).action).toBe('unchanged');
+    expect(readFileSync(c.configPath!, 'utf8')).toBe(before);
+    expect(readdirSync(dir).filter((f) => f.includes('backup'))).toEqual([]);
+  });
+
+  it('installing never touches a per-directory entry', () => {
+    const c = write({ projects: { '/a': { mcpServers: { debugai: OURS } } } });
+    const r = applyToClient(c);
+    expect(r.removedProjects).toBeUndefined();
+    expect(JSON.parse(readFileSync(c.configPath!, 'utf8')).projects['/a'].mcpServers.debugai).toEqual(OURS);
+  });
+
+  it('a dry run names the directories and writes nothing', () => {
+    const c = write({ projects: { '/a': { mcpServers: { debugai: OURS } } } });
+    const before = readFileSync(c.configPath!, 'utf8');
+    const r = applyToClient(c, { remove: true, dryRun: true });
+    expect(r.removedProjects).toEqual(['/a']);
+    expect(readFileSync(c.configPath!, 'utf8')).toBe(before);
+  });
+
+  it('never throws on a projects key that is junk', () => {
+    for (const projects of [null, 'nope', 42, [], { x: null }, { x: { mcpServers: 'no' } }, { x: { mcpServers: [] } }]) {
+      const c = write({ mcpServers: { debugai: OURS }, projects });
+      expect(() => applyToClient(c, { remove: true })).not.toThrow();
+      expect(JSON.parse(readFileSync(c.configPath!, 'utf8')).projects).toEqual(projects);
+    }
   });
 });
