@@ -179,6 +179,46 @@ function usableVersion(v: unknown): v is string {
     return t.length > 0 && t.length <= MAX_VERSION_LENGTH && !/[\r\n]/.test(t);
 }
 
+/**
+ * A manifest's text, from the bytes on disk, decoded by its byte-order mark.
+ *
+ * The tools these files belong to all accept one, so the files exist. Windows
+ * PowerShell 5.1 writes UTF-16 for `pip freeze > requirements.txt`, and pip
+ * installs from it. Read as UTF-8 that file is a NUL between every two
+ * letters, in which no line is a package name: the list came back empty and
+ * complete, and the engine answered `No module named 'flask'` with "`flask` is
+ * not declared in requirements.txt" and a command appending to the file that
+ * lists it (2026-10-01). A UTF-8 mark in front of a package.json, which npm
+ * skips, made `JSON.parse` throw to the same end.
+ *
+ * Both callers read bytes and hand them here; neither decodes for itself.
+ */
+export function manifestText(bytes: Uint8Array): string {
+    const n = bytes.length;
+    const le = n >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE;
+    const be = n >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF;
+    if (le || be) {
+        let out = '';
+        const units: number[] = [];
+        for (let i = 2; i + 1 < n; i += 2) {
+            units.push(le ? bytes[i] | (bytes[i + 1] << 8) : (bytes[i] << 8) | bytes[i + 1]);
+            if (units.length === 4096) { out += String.fromCharCode(...units); units.length = 0; }
+        }
+        return out + String.fromCharCode(...units);
+    }
+    // The decoder drops a UTF-8 mark itself, which is the default asked for here.
+    return new TextDecoder('utf-8').decode(bytes);
+}
+
+/**
+ * True when a manifest's text cannot be what the file says: a NUL is in no
+ * manifest format, so the bytes were in an encoding the reader did not use.
+ * Such a file is there and unread, which is the opposite of declaring nothing.
+ */
+function unreadable(text: string): boolean {
+    return text.includes('\u0000');
+}
+
 /** First write wins, so a later manifest cannot silently overwrite an earlier one. */
 function putVersion(into: Record<string, string>, name: string, version: unknown): void {
     const n = (name || '').trim();
@@ -229,6 +269,20 @@ export function depsFromPackageJson(text: string): string[] {
         }
     }
     return out;
+}
+
+/**
+ * Whether a `package.json` parsed into an object at all. `depsFromPackageJson`
+ * answers `[]` for a file with no dependencies and for a file it could not
+ * parse, and only the first of those is a fact about the project.
+ */
+export function isJsonObject(text: string): boolean {
+    try {
+        const v: unknown = JSON.parse(text);
+        return typeof v === 'object' && v !== null && !Array.isArray(v);
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -719,6 +773,14 @@ export interface FactInputs {
     csprojFiles?: string[];
     /** True when the caller stopped looking for .csproj files before exhausting them. */
     csprojTruncated?: boolean;
+    /**
+     * True when the caller knows of declarations it is not handing over: it
+     * stopped looking for manifests, or found one it could not read or parse.
+     * Whatever kind of manifest that was, a name missing from the list then
+     * proves nothing. `csprojTruncated` is read only beside project files that
+     * were read, so a repository with none had no way to say this.
+     */
+    declaredTruncated?: boolean;
     /** Workspace-relative paths of every `.py` file the caller found. */
     pythonFiles?: string[];
     /** True when the caller's file search hit its own limit. */
@@ -747,35 +809,52 @@ export function buildWorkspaceFacts(input: FactInputs): WorkspaceFacts {
     const declared: string[] = [];
     const versions: Record<string, string> = {};
 
+    // A manifest that is there and could not be read is named, so the engine
+    // knows the project has one, and the list is marked short. Leaving the
+    // mark off said "this file declares nothing", and every name the error
+    // mentioned was then reported as undeclared.
     if (typeof input.packageJson === 'string') {
         manifests.push('package.json');
-        declared.push(...depsFromPackageJson(input.packageJson));
-        mergeVersions(versions, versionsFromPackageJson(input.packageJson));
+        if (unreadable(input.packageJson) || !isJsonObject(input.packageJson)) {
+            incomplete.add('declared_deps');
+        } else {
+            declared.push(...depsFromPackageJson(input.packageJson));
+            mergeVersions(versions, versionsFromPackageJson(input.packageJson));
+        }
     }
     if (typeof input.requirementsTxt === 'string') {
         manifests.push('requirements.txt');
-        const { deps, sawInclude } = depsFromRequirements(input.requirementsTxt);
-        declared.push(...deps);
-        mergeVersions(versions, versionsFromRequirements(input.requirementsTxt));
-        // `-r base.txt` means the real list continues in a file we did not read.
-        if (sawInclude) { incomplete.add('declared_deps'); }
+        if (unreadable(input.requirementsTxt)) {
+            incomplete.add('declared_deps');
+        } else {
+            const { deps, sawInclude } = depsFromRequirements(input.requirementsTxt);
+            declared.push(...deps);
+            mergeVersions(versions, versionsFromRequirements(input.requirementsTxt));
+            // `-r base.txt` means the real list continues in a file we did not read.
+            if (sawInclude) { incomplete.add('declared_deps'); }
+        }
     }
     if (typeof input.pyprojectToml === 'string') {
         manifests.push('pyproject.toml');
-        const { deps, found, partial } = depsFromPyproject(input.pyprojectToml);
-        declared.push(...deps);
-        mergeVersions(versions, versionsFromPyproject(input.pyprojectToml));
-        // The file is there and we could not find its declarations, or found
-        // them and could not read them whole. Saying nothing here would let
-        // the engine read our silence as "declares nothing", which is the one
-        // reading that is certainly wrong.
-        if (!found || partial) { incomplete.add('declared_deps'); }
+        if (unreadable(input.pyprojectToml)) {
+            incomplete.add('declared_deps');
+        } else {
+            const { deps, found, partial } = depsFromPyproject(input.pyprojectToml);
+            declared.push(...deps);
+            mergeVersions(versions, versionsFromPyproject(input.pyprojectToml));
+            // The file is there and we could not find its declarations, or found
+            // them and could not read them whole. Saying nothing here would let
+            // the engine read our silence as "declares nothing", which is the one
+            // reading that is certainly wrong.
+            if (!found || partial) { incomplete.add('declared_deps'); }
+        }
     }
 
     if (Array.isArray(input.csprojFiles) && input.csprojFiles.length > 0) {
         manifests.push('*.csproj');
         for (const text of input.csprojFiles) {
             if (typeof text !== 'string') { continue; }
+            if (unreadable(text)) { incomplete.add('declared_deps'); continue; }
             const { deps, versions: v } = depsFromCsproj(text);
             declared.push(...deps);
             mergeVersions(versions, v);
@@ -784,6 +863,7 @@ export function buildWorkspaceFacts(input: FactInputs): WorkspaceFacts {
         // than we can see, and a name missing from a short list proves nothing.
         if (input.csprojTruncated) { incomplete.add('declared_deps'); }
     }
+    if (input.declaredTruncated) { incomplete.add('declared_deps'); }
 
     const declaredSorted = dedupeSorted(declared);
     if (declaredSorted.length > MAX_DECLARED_DEPS) { incomplete.add('declared_deps'); }

@@ -51,9 +51,9 @@
  * than the guessing this replaces.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join, resolve, extname, relative, sep } from 'node:path';
+import { join, resolve, extname, relative, isAbsolute } from 'node:path';
 
-import { buildWorkspaceFacts, type WorkspaceFacts } from './workspaceFacts.js';
+import { buildWorkspaceFacts, manifestText, type WorkspaceFacts } from './workspaceFacts.js';
 
 /**
  * Opened by exact name only. `.env` is absent on purpose - see the header.
@@ -74,6 +74,19 @@ type ManifestName = (typeof MANIFEST_FILES)[number];
 
 function isManifestName(name: string): name is ManifestName {
   return (MANIFEST_FILES as readonly string[]).includes(name);
+}
+
+/**
+ * Copies of an env file that are kept to be copied from. Nothing loads them, so
+ * one of these alone is a project with NO env file - which is what the fix was
+ * in the row `has_env_file` was added for, and the opposite of what it said.
+ */
+const ENV_TEMPLATES = new Set(['example', 'sample', 'template', 'dist']);
+
+function isEnvFile(name: string): boolean {
+  if (name === '.env') { return true; }
+  if (!name.startsWith('.env.')) { return false; }
+  return !ENV_TEMPLATES.has(name.slice(name.lastIndexOf('.') + 1).toLowerCase());
 }
 
 /** .NET project files. Names vary per project, so these go by extension. */
@@ -135,7 +148,10 @@ function insideRoot(candidate: string, root: string): boolean {
   try { realRoot = realpathSync(root); } catch { return false; }
   try { realCandidate = realpathSync(candidate); } catch { return false; }
   const rel = relative(realRoot, realCandidate);
-  return rel === '' || (!rel.startsWith('..') && !rel.startsWith(sep + '..'));
+  // `relative` answers an ABSOLUTE path when the two are on different Windows
+  // volumes, which starts with no `..` and read as inside. Same test as
+  // sourceContext.ts.
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 function readCapped(path: string, root: string): string | null {
@@ -143,7 +159,7 @@ function readCapped(path: string, root: string): string | null {
     if (!insideRoot(path, root)) { return null; }
     const st = statSync(path);
     if (!st.isFile() || st.size > MAX_MANIFEST_BYTES) { return null; }
-    return readFileSync(path, 'utf8');
+    return manifestText(readFileSync(path));
   } catch {
     return null;
   }
@@ -156,8 +172,16 @@ interface Walked {
   csprojTruncated: boolean;
   nested: Array<{ name: string; path: string }>;
   nestedTruncated: boolean;
+  /** Manifest names seen at the root, read or not. */
+  rootManifests: string[];
   rootDirs: string[];
   hasEnvFile: boolean;
+  /**
+   * The walk ended before the tree did: the clock, the directory cap, a
+   * directory too deep to enter, or one that could not be listed. What is in
+   * the part not visited is unknown, so no list built from this walk is whole.
+   */
+  cut: boolean;
 }
 
 /**
@@ -172,14 +196,14 @@ function walk(root: string, deadline: number): Walked {
     pythonFiles: [], pythonTruncated: false,
     csprojPaths: [], csprojTruncated: false,
     nested: [], nestedTruncated: false,
-    rootDirs: [], hasEnvFile: false,
+    rootManifests: [], rootDirs: [], hasEnvFile: false,
+    cut: false,
   };
   const queue: Array<{ dir: string; depth: number }> = [{ dir: root, depth: 0 }];
   let visited = 0;
 
   while (queue.length > 0) {
-    if (Date.now() > deadline) { out.pythonTruncated = true; out.csprojTruncated = true; break; }
-    if (visited >= MAX_DIRS) { out.pythonTruncated = true; out.csprojTruncated = true; break; }
+    if (Date.now() > deadline || visited >= MAX_DIRS) { out.cut = true; break; }
     const next = queue.shift();
     if (!next) { break; }
     const { dir, depth } = next;
@@ -190,6 +214,7 @@ function walk(root: string, deadline: number): Walked {
       entries = readdirSync(dir, { withFileTypes: true })
         .map(d => ({ name: d.name, isDir: d.isDirectory() }));
     } catch {
+      out.cut = true;
       continue;
     }
 
@@ -205,9 +230,11 @@ function walk(root: string, deadline: number): Walked {
         if (depth === 0) { out.rootDirs.push(e.name); }
         if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) { continue; }
         if (depth + 1 <= MAX_DEPTH) { queue.push({ dir: join(dir, e.name), depth: depth + 1 }); }
+        else { out.cut = true; }
         continue;
       }
-      if (depth === 0 && (e.name === '.env' || e.name.startsWith('.env.'))) {
+      if (depth === 0 && isManifestName(e.name)) { out.rootManifests.push(e.name); }
+      if (depth === 0 && isEnvFile(e.name)) {
         // Recorded, never opened. See the header.
         out.hasEnvFile = true;
       }
@@ -240,7 +267,8 @@ function walk(root: string, deadline: number): Walked {
 /** What the gatherer adds on top of the shared pure contract. */
 export interface GatheredFacts extends WorkspaceFacts {
   /**
-   * A `.env` (or `.env.*`) sits at the project root.
+   * A `.env` (or `.env.local`, `.env.production`, ...) sits at the project
+   * root. A template kept to be copied from (`.env.example`) is not one.
    *
    * Recorded because two of the 76 fixes in the 2026-09-13 corpus turned on it
    * - one workspace had only `.env.example`, another had a deployed value that
@@ -278,8 +306,22 @@ export function gatherWorkspaceFacts(root: string | null | undefined): GatheredF
     const deadline = Date.now() + DEADLINE_MS;
     const walked = walk(abs, deadline);
 
-    const manifest = (name: string) =>
-      isManifestName(name) ? readCapped(join(abs, name), abs) : null;
+    // Every way a declaration can be on this disk and not in the list: the walk
+    // stopped short, a cap was reached, or a manifest was seen and could not be
+    // read or parsed. Until 2026-10-01 only a .csproj cap was ever reported, and
+    // only beside project files that had been read - so in a repository with
+    // none, the tenth requirements.txt, a module seven directories down and a
+    // manifest over the size cap all left a list that called itself complete,
+    // and the engine told people a dependency they had declared was "not
+    // declared in requirements.txt".
+    let short = walked.cut || walked.nestedTruncated || walked.csprojTruncated;
+
+    const manifest = (name: string) => {
+      if (!isManifestName(name)) { return null; }
+      const text = readCapped(join(abs, name), abs);
+      if (text === null && walked.rootManifests.includes(name)) { short = true; }
+      return text;
+    };
 
     // Nested manifests, concatenated per KIND into the same string the root one
     // occupies. Concatenation is safe for the two text formats and keeps the
@@ -290,9 +332,9 @@ export function gatherWorkspaceFacts(root: string | null | undefined): GatheredF
     // contributes nothing rather than breaking the set.
     const extraByKind: Record<string, string[]> = {};
     for (const n of walked.nested) {
-      if (Date.now() > deadline) { walked.nestedTruncated = true; break; }
+      if (Date.now() > deadline) { short = true; break; }
       const text = readCapped(n.path, abs);
-      if (text === null) { continue; }
+      if (text === null) { short = true; continue; }
       (extraByKind[n.name] ||= []).push(text);
     }
     const joined = (name: string): string | null => {
@@ -307,8 +349,8 @@ export function gatherWorkspaceFacts(root: string | null | undefined): GatheredF
         for (const text of [root, ...extra]) {
           if (text === null) { continue; }
           let pkg: any;
-          try { pkg = JSON.parse(text); } catch { continue; }
-          if (!pkg || typeof pkg !== 'object') { continue; }
+          try { pkg = JSON.parse(text); } catch { short = true; continue; }
+          if (!pkg || typeof pkg !== 'object') { short = true; continue; }
           for (const field of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
             const block = pkg[field];
             if (!block || typeof block !== 'object' || Array.isArray(block)) { continue; }
@@ -322,21 +364,27 @@ export function gatherWorkspaceFacts(root: string | null | undefined): GatheredF
 
     const csprojFiles: string[] = [];
     for (const p of walked.csprojPaths) {
-      if (Date.now() > deadline) { walked.csprojTruncated = true; break; }
+      if (Date.now() > deadline) { short = true; break; }
       const text = readCapped(p, abs);
-      if (text !== null) { csprojFiles.push(text); }
+      if (text !== null) { csprojFiles.push(text); } else { short = true; }
     }
 
+    // Read in this order on purpose: each call can find a manifest it could
+    // not use, and `short` has to be settled before it is handed over.
+    const packageJson = joined('package.json');
+    const requirementsTxt = joined('requirements.txt');
+    const pyprojectToml = joined('pyproject.toml');
+
     const facts = buildWorkspaceFacts({
-      packageJson: joined('package.json'),
-      requirementsTxt: joined('requirements.txt'),
-      pyprojectToml: joined('pyproject.toml'),
+      packageJson,
+      requirementsTxt,
+      pyprojectToml,
       csprojFiles,
       // A manifest list we stopped enumerating declares more than we can see,
       // and a name missing from a short list must prove nothing.
-      csprojTruncated: walked.csprojTruncated || walked.nestedTruncated,
+      declaredTruncated: short,
       pythonFiles: walked.pythonFiles,
-      pythonFilesTruncated: walked.pythonTruncated,
+      pythonFilesTruncated: walked.pythonTruncated || walked.cut,
       rootDirs: walked.rootDirs,
       // Deliberately absent: `python_interpreter`. VS Code's Python extension
       // reports which interpreter is SELECTED; this process has no equivalent

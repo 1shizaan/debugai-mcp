@@ -8,11 +8,11 @@
  * exists for and the one a fixture would flatten.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { gatherWorkspaceFacts, MANIFEST_FILES, MAX_CSPROJ, __resetWorkspaceFactsCache } from '../src/gatherWorkspaceFacts.js';
+import { gatherWorkspaceFacts, MANIFEST_FILES, MAX_CSPROJ, MAX_DIRS, __resetWorkspaceFactsCache } from '../src/gatherWorkspaceFacts.js';
 
 let root: string;
 
@@ -327,5 +327,190 @@ describe('the cache', () => {
     writeFileSync(join(d, 'package.json'), JSON.stringify({ dependencies: { later: '1.0.0' } }));
     expect(gatherWorkspaceFacts(d)!.declared_deps).toContain('later');
     rmSync(d, { recursive: true, force: true });
+  });
+});
+
+
+// ── A short list says it is short (X41, 2026-10-01) ──────────────────────────
+//
+// Every case below returned a list that called itself complete, and the real
+// engine fast path then answered `No module named 'fastapi'` with "`fastapi` is
+// not declared in requirements.txt and is not a file in this project" and
+// `pip freeze | grep -i fastapi >> requirements.txt` - about a package the
+// project declares, or a module that is one of its own files. The only cap that
+// was ever reported was the .csproj one, and only beside project files that had
+// been read, so a repository with none had no way to say any of this.
+describe('whatever the walk did not see marks the lists short', () => {
+  const tree = (name: string) => mkdtempSync(join(tmpdir(), `dbgai-${name}-`));
+  const put = (root: string, rel: string, body: string | Buffer) => {
+    mkdirSync(join(root, rel, '..'), { recursive: true });
+    writeFileSync(join(root, rel), body);
+  };
+
+  it('more nested manifests than the cap, with no .csproj anywhere', () => {
+    const d = tree('nested');
+    put(d, 'requirements.txt', 'pytest==8.0.0\n');
+    for (let i = 0; i < 9; i++) put(d, `svc${i}/requirements.txt`, `lib${i}==1.0\n`);
+    put(d, 'deep/inner/requirements.txt', 'fastapi==0.115.0\n');
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.declared_deps).not.toContain('fastapi');           // it really was not read
+    expect(f.incomplete).toContain('declared_deps');            // and the list says so
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('a module below the depth the walk goes to', () => {
+    const d = tree('depth');
+    put(d, 'requirements.txt', 'pytest==8.0.0\n');
+    put(d, 'a/b/c/d/e/f/g/helper_mod.py', 'x = 1\n');
+    put(d, 'main.py', 'import helper_mod\n');
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.local_modules).toEqual(['main']);
+    expect(f.incomplete).toEqual(['declared_deps', 'local_modules']);
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('more directories than the walk visits', () => {
+    const d = tree('wide');
+    put(d, 'requirements.txt', 'pytest==8.0.0\n');
+    for (let i = 0; i < MAX_DIRS + 5; i++) mkdirSync(join(d, `pkg${i}`));
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.incomplete).toEqual(['declared_deps', 'local_modules']);
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('a tree that fits inside every bound is complete', () => {
+    // The other half: none of the marks above may fire on an ordinary project.
+    const d = tree('fits');
+    put(d, 'requirements.txt', 'pytest==8.0.0\n');
+    put(d, 'a/b/c/d/e/f/deep_enough.py', 'x = 1\n');
+    put(d, 'svc/requirements.txt', 'fastapi==0.115.0\n');
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.local_modules).toContain('deep_enough');
+    expect(f.declared_deps).toContain('fastapi');
+    expect(f.incomplete).toEqual([]);
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('a nested manifest that is there and too big to read', () => {
+    const d = tree('big');
+    put(d, 'requirements.txt', 'pytest==8.0.0\n');
+    put(d, 'svc/requirements.txt', 'fastapi==0.115.0\n' + '# pad\n'.repeat(100_000));
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.declared_deps).toEqual(['pytest']);
+    expect(f.incomplete).toContain('declared_deps');
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('a ROOT manifest that is there and too big to read, beside a nested one that was', () => {
+    const d = tree('bigroot');
+    put(d, 'requirements.txt', 'flask==3.0.0\n' + '# pad\n'.repeat(100_000));
+    put(d, 'svc/requirements.txt', 'fastapi==0.115.0\n');
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.declared_deps).toEqual(['fastapi']);
+    expect(f.incomplete).toContain('declared_deps');
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('a project file that is there and too big to read', () => {
+    const d = tree('bigproj');
+    put(d, 'A/A.csproj', '<Project><ItemGroup><PackageReference Include="Seen" Version="1.0.0"/></ItemGroup></Project>');
+    put(d, 'B/B.csproj', '<Project>' + '<!-- pad -->'.repeat(60_000) + '</Project>');
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.declared_deps).toEqual(['Seen']);
+    expect(f.incomplete).toContain('declared_deps');
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('a package.json that does not parse, at the root or below it', () => {
+    for (const where of ['package.json', 'app/package.json']) {
+      for (const broken of ['{ "dependencies": { "express": "4.19.2", } }', 'null', '"a string"']) {
+        const d = tree('badjson');
+        put(d, where, broken);
+        put(d, 'other/package.json', JSON.stringify({ dependencies: { survivor: '2.0.0' } }));
+        const f = gatherWorkspaceFacts(d)!;
+        expect(f.declared_deps, `${where} ${broken}`).toEqual(['survivor']);
+        expect(f.incomplete, `${where} ${broken}`).toContain('declared_deps');
+        rmSync(d, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('a directory it could not list', () => {
+    if (process.getuid?.() === 0) return;      // root reads everything
+    const d = tree('locked');
+    put(d, 'requirements.txt', 'pytest==8.0.0\n');
+    put(d, 'private/requirements.txt', 'fastapi==0.115.0\n');
+    chmodSync(join(d, 'private'), 0o000);
+    try {
+      const f = gatherWorkspaceFacts(d)!;
+      expect(f.declared_deps).toEqual(['pytest']);
+      expect(f.incomplete).toEqual(['declared_deps', 'local_modules']);
+    } finally {
+      chmodSync(join(d, 'private'), 0o755);
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a manifest is read in the encoding its own tool reads it in', () => {
+  it('requirements.txt as Windows PowerShell 5.1 writes it for `pip freeze >`', () => {
+    const d = mkdtempSync(join(tmpdir(), 'dbgai-utf16-'));
+    const body = 'flask==3.0.0\r\nnumpy==1.26.4\r\n';
+    writeFileSync(join(d, 'requirements.txt'), Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(body, 'utf16le')]));
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.declared_deps).toEqual(['flask', 'numpy']);
+    expect(f.declared_versions['flask']).toBe('==3.0.0');
+    expect(f.incomplete).toEqual([]);
+    rmSync(d, { recursive: true, force: true });
+  });
+
+  it('a package.json with a UTF-8 mark in front, which npm accepts', () => {
+    const d = mkdtempSync(join(tmpdir(), 'dbgai-bom-'));
+    writeFileSync(join(d, 'package.json'), '\uFEFF' + JSON.stringify({ dependencies: { express: '4.19.2' } }));
+    const f = gatherWorkspaceFacts(d)!;
+    expect(f.declared_versions['express']).toBe('4.19.2');
+    expect(f.incomplete).toEqual([]);
+    rmSync(d, { recursive: true, force: true });
+  });
+});
+
+describe('an env file is one something loads', () => {
+  const only = (...names: string[]) => {
+    const d = mkdtempSync(join(tmpdir(), 'dbgai-env-'));
+    writeFileSync(join(d, 'package.json'), '{}');
+    for (const n of names) writeFileSync(join(d, n), 'KEY=\n');
+    const has = gatherWorkspaceFacts(d)!.has_env_file;
+    rmSync(d, { recursive: true, force: true });
+    return has;
+  };
+
+  it.each(['.env.example', '.env.sample', '.env.template', '.env.dist', '.env.EXAMPLE', '.env.local.example'])(
+    'a project with only %s has no env file', (name) => {
+      // The row this field was added for: "one workspace had only .env.example".
+      // Reported as present, the engine told the model "A `.env` file exists at
+      // the project root", which is the opposite of what was wrong there.
+      expect(only(name)).toBe(false);
+    });
+
+  it.each(['.env', '.env.local', '.env.production', '.env.development.local'])('%s is one', (name) => {
+    expect(only(name)).toBe(true);
+  });
+
+  it('a template beside a real one changes nothing', () => {
+    expect(only('.env.example', '.env')).toBe(true);
+  });
+});
+
+describe('the containment test holds across Windows volumes', () => {
+  // `path.relative('C:\\repo', 'D:\\x\\requirements.txt')` is the absolute
+  // `D:\\x\\requirements.txt`: no `..` in front, so it read as inside. Run on
+  // real Windows 2026-10-01 against a file on another volume, the old test
+  // answered true. Two volumes cannot be built on this machine, so the rule is
+  // pinned as text beside the same rule in sourceContext.ts.
+  it('refuses an absolute relative path, in the gatherer as in the source reader', () => {
+    const gather = readFileSync(new URL('../src/gatherWorkspaceFacts.ts', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../src/sourceContext.ts', import.meta.url), 'utf8');
+    expect(gather).toContain("return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));");
+    expect(source).toContain("!rel.startsWith('..') && !isAbsolute(rel)");
   });
 });
