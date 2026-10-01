@@ -2,7 +2,7 @@
 // 2026-09-16 session that filed a whole build under the wrong repository.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { statSync } from 'node:fs';
@@ -13,6 +13,7 @@ import {
   explicitProject,
   hashRoot,
   sameDirectory,
+  samePath,
   tooBroad,
 } from '../src/explicitProject.js';
 import { gitToplevel, hashPath } from '../src/project.js';
@@ -106,5 +107,58 @@ describe('never throws', () => {
     expect(explicitProject({})).toBeNull();
     expect(explicitProject({ projectRoot: '', filePath: '' })).toBeNull();
     expect(explicitProject({ projectRoot: '\u0000bad' })).toBeNull();
+  });
+});
+
+
+// ── One directory, two spellings (Windows) ───────────────────────────────────
+//
+// Run on Windows 2026-10-01 with real git and the built module. git printed
+// `C:/Users/mohiu/.../My Repo`, VS Code hands down `c:\Users\mohiu\...\My Repo`,
+// and realpathSync keeps the drive letter's case as given. sameDirectory
+// answered false for the folder that was open, so the bundled server filed an
+// agent's error under a second project id; and tooBroad answered false for the
+// home directory spelled with a lower-case drive, so it was taken as a root.
+describe('samePath', () => {
+  const GIT = 'C:/Users/mohiu/AppData/Local/Temp/dbgai-a/My Repo';
+  const VSCODE = 'c:\\Users\\mohiu\\AppData\\Local\\Temp\\dbgai-a\\My Repo';
+  const REAL = 'C:\\Users\\mohiu\\AppData\\Local\\Temp\\dbgai-a\\My Repo';
+
+  it('on Windows, the three spellings of one directory are one directory', () => {
+    expect(samePath(GIT, VSCODE, true)).toBe(true);
+    expect(samePath(REAL, VSCODE, true)).toBe(true);
+    expect(samePath(REAL, GIT, true)).toBe(true);
+    expect(samePath(REAL + '\\', VSCODE, true)).toBe(true);
+  });
+
+  it('on Windows, a different directory is still a different directory', () => {
+    expect(samePath(REAL, REAL + ' 2', true)).toBe(false);
+    expect(samePath(REAL, 'D' + REAL.slice(1), true)).toBe(false);
+    expect(samePath('C:\\Users\\mohiu', 'C:\\Users', true)).toBe(false);
+  });
+
+  it('on Windows, a drive root is not the drive\'s first folder, and equals itself in either case', () => {
+    expect(samePath('C:\\', 'c:\\', true)).toBe(true);
+    expect(samePath('C:\\', 'C:\\Users', true)).toBe(false);
+    expect(samePath('\\\\server\\share\\', '\\\\SERVER\\share', true)).toBe(true);
+  });
+
+  it('everywhere else a path is compared as it is: Foo and foo are two directories', () => {
+    expect(samePath('/home/u/Foo', '/home/u/foo', false)).toBe(false);
+    expect(samePath('/home/u/foo', '/home/u/foo', false)).toBe(true);
+    expect(samePath('/home/u/a\\b', '/home/u/a/b', false)).toBe(false);
+  });
+
+  it('this platform is the default', () => {
+    expect(samePath('/a/B', '/a/b')).toBe(process.platform === 'win32');
+  });
+
+  it('both checks that compare directories go through it', () => {
+    // Text, because the two spellings cannot be produced on this machine.
+    const src = readFileSync(new URL('../src/explicitProject.ts', import.meta.url), 'utf8');
+    expect(src).toContain('return samePath(r, parse(r).root) || samePath(r, real(homedir()));');
+    expect(src).toContain('return samePath(real(a), real(b));');
+    expect(src).not.toMatch(/real\([ab]\) === real\(/);
+    expect(src).not.toMatch(/r === (parse|real)\(/);
   });
 });

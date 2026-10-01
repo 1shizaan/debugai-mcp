@@ -19,6 +19,14 @@
  *    normal case, and resolving to the repo root also means an agent invoked
  *    from a subdirectory lands on the same id as one invoked from the root.
  *
+ *    NOT ON WINDOWS, and this is open (docs/review, extension batch A). Run
+ *    there 2026-10-01: git prints `C:/Users/me/repo`, the extension hashes
+ *    `c:\Users\me\repo`, and the two md5s differ. So this server and the
+ *    extension keep two memories of one Windows checkout, and this server
+ *    never sees the index the extension built. Changing the spelling hashed
+ *    here would join them and orphan what this server has already stored
+ *    under the old id, which is why it has not simply been changed.
+ *
  * 2. It does NOT need to be unguessable. The API gateway namespaces every
  *    incoming project_id as `u_<user.id>__<project_id>` before the engine sees
  *    it (apps/api/src/routes/debug.ts), so the authenticated user is the real

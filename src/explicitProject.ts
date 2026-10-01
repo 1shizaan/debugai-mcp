@@ -72,10 +72,27 @@ function real(p: string): string {
   }
 }
 
+/**
+ * Whether two resolved paths name one place.
+ *
+ * On Windows one directory arrives in two spellings. git prints
+ * `C:/Users/me/repo`; VS Code hands down `c:\Users\me\repo`, drive letter
+ * lower-cased; `realpathSync` keeps whichever case it was given. Compared
+ * as strings they differ, and two checks here were string comparisons. Run on
+ * Windows 2026-10-01: an agent naming the folder that was open got a second
+ * project id for it (so its memory split in two), and the home directory,
+ * spelled with a lower-case drive, was accepted as a project root.
+ */
+export function samePath(a: string, b: string, windows: boolean = process.platform === 'win32'): boolean {
+  if (!windows) return a === b;
+  const fold = (p: string): string => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  return fold(a) === fold(b);
+}
+
 /** The filesystem root or the home directory: too wide to be a boundary. */
 export function tooBroad(root: string): boolean {
   const r = real(root);
-  return r === parse(r).root || r === real(homedir());
+  return samePath(r, parse(r).root) || samePath(r, real(homedir()));
 }
 
 const memo = new Map<string, ExplicitProject | null>();
@@ -121,9 +138,9 @@ export function hashRoot(root: string): string {
   return createHash('md5').update(root).digest('hex');
 }
 
-/** Whether two paths are one directory, symlinks and trailing slashes aside. */
+/** Whether two paths are one directory: symlinks, trailing slashes and Windows spelling aside. */
 export function sameDirectory(a: string, b: string): boolean {
-  return real(a) === real(b);
+  return samePath(real(a), real(b));
 }
 
 /** Test seam. */
