@@ -16,6 +16,7 @@
 import { configPath, loadFileConfig, writeFileConfig } from './config.js';
 import {
   DeviceLinkError,
+  freeTierText,
   pollDeviceLink,
   startDeviceLink,
   type DeviceLinkPoll,
@@ -152,7 +153,7 @@ export class AuthProvider {
         'config file editing.\n\n' +
         'Tell the user, verbatim:\n' +
         `  1. Open ${start.verificationUriComplete}\n` +
-        `  2. Sign in (free, 10 debugs/day, no card) and confirm the code ${start.userCode}\n\n` +
+        `  2. Sign in (${freeTierText(start.freeDailyLimit)}) and confirm the code ${start.userCode}\n\n` +
         'Then call this tool again with the same arguments. The key is picked up automatically ' +
         'on the next call. The MCP client does NOT need restarting. ' +
         `The code expires in ${Math.round(start.expiresIn / 60)} minutes.`,

@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } fro
 import { tmpdir, platform } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_FAILED_POLLS, isWebAddress, pollDeviceLink, startDeviceLink, waitForDeviceLink } from '../src/deviceLink.js';
+import { MAX_FAILED_POLLS, freeTierText, isWebAddress, pollDeviceLink, startDeviceLink, waitForDeviceLink } from '../src/deviceLink.js';
 import { AuthProvider } from '../src/auth.js';
 import { writeFileConfig, clearStoredKey, maskKey } from '../src/config.js';
 
@@ -23,6 +23,26 @@ beforeEach(() => {
   env = { DEBUGAI_CONFIG_PATH: join(dir, 'config.json') };
 });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+describe('the free-tier sentence', () => {
+  it('uses the limit the server reports and never a number of its own', async () => {
+    const ok = (extra: object) => vi.fn().mockResolvedValue(jsonResponse(200, {
+      device_code: 'dc', user_code: 'ABCD-2345', verification_uri: 'https://debugai.io/link', ...extra,
+    }));
+    const withLimit = await startDeviceLink({ apiBase, fetchImpl: ok({ free_daily_limit: 15 }) as any });
+    const without = await startDeviceLink({ apiBase, fetchImpl: ok({}) as any });
+    const junk = await startDeviceLink({ apiBase, fetchImpl: ok({ free_daily_limit: '15; rm' }) as any });
+    expect(freeTierText(withLimit.freeDailyLimit)).toBe('free, 15 debugs/day, no card');
+    expect(freeTierText(without.freeDailyLimit, 'account')).toBe('free account, no card');
+    expect(freeTierText(junk.freeDailyLimit)).toBe('free, no card');
+  });
+
+  it('is not hardcoded in the sign-in text', () => {
+    for (const f of ['../src/auth.ts', '../src/cli/commands.ts']) {
+      expect(readFileSync(new URL(f, import.meta.url), 'utf8')).not.toMatch(/\b10 debugs/);
+    }
+  });
+});
 
 describe('startDeviceLink', () => {
   it('maps the server payload onto the client shape', async () => {

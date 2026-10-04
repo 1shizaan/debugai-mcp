@@ -26,6 +26,8 @@ export interface DeviceLinkStart {
   expiresIn: number;
   /** Minimum seconds between polls, per the server. */
   interval: number;
+  /** The free tier's daily debug limit as the server enforces it; absent from an older server. */
+  freeDailyLimit?: number;
 }
 
 export type DeviceLinkPoll =
@@ -94,6 +96,17 @@ export function isWebAddress(v: unknown): v is string {
   return typeof v === 'string' && /^https?:\/\/\S+$/i.test(v.trim());
 }
 
+/**
+ * "free, 10 debugs/day, no card", with the number the server said. The text
+ * used to hardcode 10, so a change to the free tier (constants.ts TIER_LIMITS)
+ * left every agent reading out the old figure. A server that does not say gets
+ * no number rather than a stale one.
+ */
+export function freeTierText(limit: number | undefined, noun = ''): string {
+  const free = noun ? `free ${noun}` : 'free';
+  return limit ? `${free}, ${limit} debugs/day, no card` : `${free}, no card`;
+}
+
 export async function startDeviceLink(opts: DeviceLinkOptions): Promise<DeviceLinkStart> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const { status, json } = await postJson(
@@ -127,6 +140,9 @@ export async function startDeviceLink(opts: DeviceLinkOptions): Promise<DeviceLi
       : address,
     expiresIn:               Number(json.expires_in) || 600,
     interval:                Number(json.interval) || 5,
+    freeDailyLimit:          Number.isInteger(json.free_daily_limit) && json.free_daily_limit > 0
+      ? json.free_daily_limit
+      : undefined,
   };
 }
 

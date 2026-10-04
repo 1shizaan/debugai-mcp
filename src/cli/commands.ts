@@ -21,7 +21,7 @@ import {
   resolveSettings,
   writeFileConfig,
 } from '../config.js';
-import { DeviceLinkError, startDeviceLink, waitForDeviceLink } from '../deviceLink.js';
+import { DeviceLinkError, freeTierText, startDeviceLink, waitForDeviceLink } from '../deviceLink.js';
 import { DEFAULT_API_BASE } from '../constants.js';
 import {
   detectedClients,
@@ -185,8 +185,8 @@ export async function cmdLogin(argv: string[], env: NodeJS.ProcessEnv = process.
   say(`  Confirm that code at ${bold(start.verificationUriComplete)}`);
   const opened = openBrowser(start.verificationUriComplete);
   say(opened
-    ? dim('  (opening your browser. free account, 10 debugs/day, no card)')
-    : dim('  (open that link on any device. free account, 10 debugs/day, no card)'));
+    ? dim(`  (opening your browser. ${freeTierText(start.freeDailyLimit, 'account')})`)
+    : dim(`  (open that link on any device. ${freeTierText(start.freeDailyLimit, 'account')})`));
   say();
   say(dim(`  Waiting… the code expires in ${Math.round(start.expiresIn / 60)} minutes. Ctrl-C to cancel.`));
 

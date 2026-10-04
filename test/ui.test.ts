@@ -18,7 +18,7 @@ describe('the sign-in address is an argument, never a command line', () => {
   it('the address the API hands out really does carry an `&`', () => {
     // Read as text (Rule 15b): this is why no shell may sit in between.
     const api = readFileSync(new URL('../../../apps/api/src/routes/deviceLink.ts', import.meta.url), 'utf8');
-    expect(api).toMatch(/verification_uri_complete: `\$\{verificationUri\}\?code=\$\{encodeURIComponent\(userCode\)\}&src=mcp`/);
+    expect(api).toMatch(/verification_uri_complete: `\$\{verificationUri\}\?code=\$\{encodeURIComponent\(userCode\)\}&src=\$\{linkSource\(rawKind\)\}`/);
   });
 
   it.each(['win32', 'darwin', 'linux'] as const)('%s: no shell, and the whole address is one argument', (os) => {
