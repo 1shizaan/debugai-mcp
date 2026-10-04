@@ -149,6 +149,30 @@ export function mapBackendErrorToToolResult(err: unknown): CallToolResult {
     };
   }
 
+  // 404: the API does not know what the call named. In practice a debug_log_id
+  // this account never received (report_outcome), and the same call unchanged
+  // is refused the same way, so it must not fall through to "retry shortly"
+  // and send an agent round a loop that cannot end. A wrong DEBUGAI_API_BASE
+  // looks the same from here, so the text names both.
+  if (status === 404) {
+    return {
+      isError: true,
+      content: [{
+        type: 'text',
+        text:
+          'DebugAI did not recognise what this call referred to (HTTP 404). For report_outcome ' +
+          'that means the debug_log_id is not one this account was given: use the debug_log_id ' +
+          'from the debug_error answer in this session, and do not retry the same one. If every ' +
+          'call is answered this way, DEBUGAI_API_BASE may be wrong.',
+      }],
+      structuredContent: {
+        error_type: 'not_found',
+        status,
+        retryable: false,
+      },
+    };
+  }
+
   if (status === 503 || status === 504) {
     return {
       isError: true,

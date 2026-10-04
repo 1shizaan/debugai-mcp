@@ -54,6 +54,15 @@ describe('mapBackendErrorToToolResult', () => {
     });
   });
 
+  it('404: an id the API does not know is not retryable, and is not "retry shortly"', () => {
+    const result = mapBackendErrorToToolResult(backendError(404, '{"error":"not found"}'));
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('did not recognise');
+    expect(textOf(result)).toContain('do not retry the same one');
+    expect(textOf(result)).not.toContain('retry shortly');
+    expect(result.structuredContent).toMatchObject({ error_type: 'not_found', status: 404, retryable: false });
+  });
+
   it('402 with unparseable body: falls back to free-tier defaults', () => {
     const result = mapBackendErrorToToolResult(backendError(402, 'Payment Required'));
     expect(textOf(result)).toContain('free tier daily quota reached (10 debugs/day)');
