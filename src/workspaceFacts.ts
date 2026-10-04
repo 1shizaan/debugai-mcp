@@ -760,6 +760,21 @@ export function moduleNameForPath(relPath: string): string | null {
     return stem;
 }
 
+/**
+ * The top-level directory a `.py` file sits under, when that directory may be a
+ * namespace package (ext 22). A directory with no `__init__.py` is still
+ * importable, so `import pkg` resolves to a folder of modules and
+ * `moduleNameForPath` alone never listed it: the engine then called `pkg`
+ * "not part of this project" and sent the user to install it. Only the first
+ * segment, and never a hidden or dunder directory.
+ */
+export function namespaceDirForPath(relPath: string): string | null {
+    const parts = (relPath || '').split(/[\\/]/).filter(Boolean);
+    if (parts.length < 2 || !parts[parts.length - 1].endsWith('.py')) { return null; }
+    const dir = parts[0];
+    return dir.startsWith('.') || dir.startsWith('__') ? null : dir;
+}
+
 /** Raw inputs, exactly as the editor hands them over. Every field optional. */
 export interface FactInputs {
     packageJson?: string | null;
@@ -868,11 +883,10 @@ export function buildWorkspaceFacts(input: FactInputs): WorkspaceFacts {
     const declaredSorted = dedupeSorted(declared);
     if (declaredSorted.length > MAX_DECLARED_DEPS) { incomplete.add('declared_deps'); }
 
-    const modules = dedupeSorted(
-        (input.pythonFiles || [])
-            .map(moduleNameForPath)
-            .filter((n): n is string => n !== null)
-    );
+    const modules = dedupeSorted([
+        ...(input.pythonFiles || []).map(moduleNameForPath),
+        ...(input.pythonFiles || []).map(namespaceDirForPath),
+    ].filter((n): n is string => n !== null));
     if (input.pythonFilesTruncated || modules.length > MAX_LOCAL_MODULES) {
         incomplete.add('local_modules');
     }
