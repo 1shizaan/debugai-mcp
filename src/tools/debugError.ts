@@ -44,6 +44,12 @@ export function formatFix(fix: DebugFix, index: number): string {
   if (fix.code) {
     lines.push('```', fix.code, '```');
   }
+  // A fix names the file it edits when that is not the file the request
+  // named (engine debug-v12). It then carries no line_hint, which has only
+  // ever meant a line of the request's file, and its edit names this file.
+  if (fix.file) {
+    lines.push(`_File: ${fix.file}_`);
+  }
   if (fix.line_hint) {
     lines.push(`_Location: ${fix.line_hint}_`);
   }

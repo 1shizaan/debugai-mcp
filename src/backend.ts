@@ -44,6 +44,8 @@ export interface DebugFix {
   confidence: number;
   code?: string;
   line_hint?: string;
+  /** The file this fix edits when it is not the file the request named; absent or '' otherwise. */
+  file?: string;
   // Self-verification (T1.3): true = mechanically checked and passed,
   // false = checked and FAILED (confidence already capped by the engine),
   // null/absent = NOT CHECKED — confidence is the model's own estimate.
