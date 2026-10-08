@@ -80,7 +80,9 @@ export function registerLookupError(server: McpServer, config: BackendConfig): v
           content: [{ type: 'text' as const, text: renderLookup(result, project) }],
           structuredContent: {
             ...result,
-            project: { root, source: explicit?.source ?? 'workspace' },
+            // 'cwd', as debug_error says for the same fallback: this server
+            // was told no workspace, it started in a folder.
+            project: { root, source: explicit?.source ?? 'cwd' },
             mcp_version: config.version,
           },
         };

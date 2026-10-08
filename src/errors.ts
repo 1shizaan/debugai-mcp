@@ -174,12 +174,19 @@ export function mapBackendErrorToToolResult(err: unknown): CallToolResult {
   }
 
   if (status === 503 || status === 504) {
+    // The engine's own sentence, when it sent one: a model outage answers 503
+    // saying the fault is ours and the attempt was not counted. That was
+    // dropped here, so an agent told its user "transient, retry" and nothing
+    // about the debug they had not been charged for.
+    const body = tryParseJson(String(message)) as { detail?: unknown; error?: unknown } | null;
+    const said = [body?.detail, body?.error].find((v): v is string => typeof v === 'string' && !!v.trim());
+    const stated = said ? ` The service said: ${said.trim().replace(/[.!?]?$/, '.')}` : '';
     return {
       isError: true,
       content: [{
         type: 'text',
         text:
-          `DebugAI engine temporarily unavailable (HTTP ${status}). ` +
+          `DebugAI engine temporarily unavailable (HTTP ${status}).${stated} ` +
           `Tell the user this is a transient issue and to retry in 30-60 seconds. ` +
           `Check status at https://status.debugai.io if it persists.`,
       }],

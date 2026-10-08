@@ -143,6 +143,11 @@ describe('mapBackendErrorToToolResult', () => {
       expect(textOf(result)).toContain(`HTTP ${status}`);
       expect(result.structuredContent).toMatchObject({ error_type: 'engine_unavailable', retryable: true });
     }
+    // A model outage says the attempt was not counted. The agent hears it.
+    const outage = mapBackendErrorToToolResult(backendError(503, JSON.stringify({
+      detail: 'The model is busy right now. Try again in a moment - this attempt has not been counted.',
+    })));
+    expect(textOf(outage)).toContain('this attempt has not been counted.');
   });
 
   it('status 0: network error, retryable', () => {
