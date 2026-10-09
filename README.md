@@ -287,9 +287,9 @@ Then run `npx -y @debugai/mcp login` once to store your key. If you would rather
 - Free tier: 10 debugs/day. Pro ($12/mo): 1,000 debugs a month included, then fair use; the 1,000 is a soft cap, so you are told at it and not stopped. `lookup_error` and the hook do not count against either.
 - When you hit the daily cap the tool says so and stops. It will not silently retry.
 - Simple errors route to a fast model. Ugly cross-file ones route to a stronger one on paid tiers. The `Model:` badge in each response tells you which one answered.
-- Analyses run on DebugAI's servers. The error text, any snippet you pass, (since 2.2) the project source files the stack trace names, and (since 2.5) the project facts described below are sent there, and Claude (Anthropic) does the analysis. The response lists every file that was read. Scope and limits are spelled out under [`debug_error`](#it-reads-the-source-the-trace-names-22). Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
+- Analyses run on DebugAI's servers. The error text, any snippet you pass, (since 2.2) the project source files the stack trace names, and (since 2.5) the project facts described below are sent there, and Claude (Anthropic) does the analysis, or OpenAI's GPT-4o-mini when Claude is unavailable. The error text is also embedded by Voyage AI to search your project's index. The response lists every file that was read. Scope and limits are spelled out under [`debug_error`](#it-reads-the-source-the-trace-names-22). Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
 - Errors are remembered per project so a repeat hit starts from a fix that was already confirmed. The project identity is a hash of your repo root path. The project id carries no path, but an absolute `filePath` is sent as written, as is any path in the error text.
-- Every `debug_error` call also reads what the project declares and sends it: `package.json`, `requirements.txt`, `pyproject.toml` and any `.csproj`, `.fsproj` or `.vbproj` (found by walking down from the project root, to a bounded depth and count). What is sent is the dependency names and the versions as the manifests spell them, the names of Python modules in the project, the names of any virtual-environment folders, and whether a `node_modules` folder and a `.env` file exist. The contents of `.env` are never opened. This happens even when you pass `codeSnippet`. It lets the engine tell a package that is declared from one that is not.
+- Every `debug_error` call also reads what the project declares and sends it: `package.json`, `requirements.txt`, `pyproject.toml` and any `.csproj`, `.fsproj` or `.vbproj` (found by walking down from the project root, to a bounded depth and count). What is sent is the dependency names and the versions as the manifests spell them, the paths of those manifests, the names of Python modules in the project, the names of any virtual-environment folders, and whether a `node_modules` folder and a `.env` file exist. The contents of `.env` are never opened. This happens even when you pass `codeSnippet`. It lets the engine tell a package that is declared from one that is not.
 - The one fact it does not send is which Python interpreter is selected. The VS Code extension can read that from the editor, which is what lets it tell "not installed" apart from "installed under a different interpreter". This server has no equivalent, so on a missing-module error you get the general answer and the check to run, not a verdict. You have a shell and it does not, so the honest division is that you run the check.
 
 ## Troubleshooting
@@ -308,7 +308,7 @@ Run `npx -y @debugai/mcp doctor` first. It checks your Node version, whether a k
 error parsing, retrieval and root-cause quality reach you without upgrading this
 package. Client releases are only for things that change on your machine.
 
-Recent server-side work, all of it live for agents already:
+Recent server-side work, which reaches agents with no upgrade:
 
 - **A failure reported by an agent is no longer refused as "not an error"** because
   its wording was not on the engine's list of error phrases. `No module named`,
@@ -350,7 +350,7 @@ Recent server-side work, all of it live for agents already:
   failing test gets cross-file context instead of none.
 
 **2.7.0** - Built from a second agent's field report, this time from a greenfield
-project on libraries newer than any model's training data (2026-09-20).
+project on libraries newer than any model's training data (report of 2026-09-20).
 
 - **`snippetStartLine`** on `debug_error`. A snippet you pass has no header, so it
   was always counted from line 1 and a window from the middle of a file could not

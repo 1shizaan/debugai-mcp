@@ -66,7 +66,7 @@ Tools exposed to your agent:
 Environment:
   DEBUGAI_API_KEY      your API key (dbg_…). Overrides the stored key.
   DEBUGAI_API_BASE     optional — API base URL (default: DebugAI production)
-  DEBUGAI_TIMEOUT_MS   optional — per-request deadline in ms (default: ${DEFAULT_TIMEOUT_MS})
+  DEBUGAI_TIMEOUT_MS   optional — debug_error deadline in ms (default: ${DEFAULT_TIMEOUT_MS})
   DEBUGAI_CONFIG_PATH  optional — alternate config file location
 
 Config file (written by login, read by every MCP client on this machine):

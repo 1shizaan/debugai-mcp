@@ -193,3 +193,49 @@ describe('the 2.7.0 notes do not claim what 2.6.0 already shipped', () => {
     expect(notes).toContain('`snippetStartLine`');
   });
 });
+
+// Release check 2 (2026-10-09), section 2.4 and 2.5: sentences that were close and
+// not exact. Each is held against the code or the engine's own config as text.
+describe('what the README says is sent, and to whom', () => {
+  it('names the fallback model the engine really falls back to, and Voyage', () => {
+    const engine = readFileSync(join(ROOT, '..', '..', 'apps/engine/app/core/config.py'), 'utf8');
+    expect(engine).toMatch(/FALLBACK_MODEL: str = "gpt-4o-mini"/);
+    expect(flat).toContain("or OpenAI's GPT-4o-mini when Claude is unavailable");
+    expect(flat).toContain("embedded by Voyage AI to search your project's index");
+  });
+
+  it('says the manifests\' paths are sent, which the facts shape carries', () => {
+    expect(read('src/workspaceFacts.ts')).toMatch(/manifests: string\[\];/);
+    expect(flat).toContain('the paths of those manifests');
+  });
+
+  it('does not say the server sends the interpreter path, which it cannot read', () => {
+    expect(flat).toContain('The one fact it does not send is which Python interpreter is selected');
+  });
+});
+
+describe('DEBUGAI_TIMEOUT_MS is the debug_error deadline, in every place that describes it', () => {
+  it('--help, the README and server.json agree', () => {
+    expect(read('src/index.ts')).toContain('debug_error deadline in ms');
+    expect(flat).toContain('Deadline for `debug_error` only');
+  });
+});
+
+describe('the Node floor message names where the floor comes from', () => {
+  it('doctor says @hono/node-server, not global fetch (fetch is in Node 18.0)', () => {
+    const doctor = read('src/cli/commands.ts');
+    expect(doctor).toContain('@hono/node-server');
+    expect(doctor).not.toContain('it uses global fetch');
+  });
+});
+
+describe('the 2.7.0 notes are dated by their report, not as a release', () => {
+  it('"(report of 2026-09-20)", because 2.7.0 had not been published when this was written', () => {
+    expect(flat).toContain('(report of 2026-09-20)');
+  });
+
+  it('the server-side list does not claim to be live already', () => {
+    expect(flat).toContain('Recent server-side work, which reaches agents with no upgrade:');
+    expect(flat).not.toContain('all of it live for agents already');
+  });
+});

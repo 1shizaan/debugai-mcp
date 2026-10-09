@@ -360,7 +360,7 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
 
   heading('Runtime');
   if (nodeAtLeast(process.versions.node)) pass(`Node ${process.versions.node}`);
-  else fail(`Node ${process.versions.node} is too old`, `DebugAI MCP needs Node ${NODE_FLOOR} or newer (it uses global fetch).`);
+  else fail(`Node ${process.versions.node} is too old`, `DebugAI MCP needs Node ${NODE_FLOOR} or newer (its HTTP server, @hono/node-server, requires it).`);
 
   heading('Account');
   const { apiKey, apiBase, keySource } = resolveSettings(DEFAULT_API_BASE, env, () => {});
