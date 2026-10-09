@@ -204,9 +204,13 @@ describe('what the README says is sent, and to whom', () => {
     expect(flat).toContain("embedded by Voyage AI to search your project's index");
   });
 
-  it('says the manifests\' paths are sent, which the facts shape carries', () => {
-    expect(read('src/workspaceFacts.ts')).toMatch(/manifests: string\[\];/);
-    expect(flat).toContain('the paths of those manifests');
+  it('says which KINDS of manifest were found are sent, because that is what the facts shape holds', () => {
+    // The field's doc comment says "relative to the root", but every push is a kind
+    // name, not a location. Read the pushes, not the comment.
+    const pushes = [...read('src/workspaceFacts.ts').matchAll(/manifests\.push\('([^']+)'\)/g)].map((m) => m[1]);
+    expect(pushes).toEqual(['package.json', 'requirements.txt', 'pyproject.toml', '*.csproj']);
+    expect(flat).toContain('which kinds of manifest were found (such as `package.json` or `*.csproj`, not where they are)');
+    expect(flat).not.toContain('the paths of those manifests');
   });
 
   it('does not say the server sends the interpreter path, which it cannot read', () => {
@@ -235,7 +239,7 @@ describe('the 2.7.0 notes are dated by their report, not as a release', () => {
   });
 
   it('the server-side list does not claim to be live already', () => {
-    expect(flat).toContain('Recent server-side work, which reaches agents with no upgrade:');
+    expect(flat).toContain('Recent server-side work. Each item reaches agents with no upgrade once the engine release that carries it is deployed:');
     expect(flat).not.toContain('all of it live for agents already');
   });
 });

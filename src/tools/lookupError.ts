@@ -75,7 +75,7 @@ export function registerLookupError(server: McpServer, config: BackendConfig): v
           { error_message: fitErrorText(errorText).text, project_id: projectId },
           gate.config,
         );
-        const project = basename(root) || root;
+        const project = root ? basename(root) || root : 'no project root';
         return {
           content: [{ type: 'text' as const, text: renderLookup(result, project) }],
           structuredContent: {

@@ -5,6 +5,10 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createServer } from '../src/server.js';
 import { formatFix } from '../src/tools/debugError.js';
+import { NO_ROOT_BADGE } from '../src/project.js';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 async function connectedClient() {
   const server = createServer({
@@ -624,5 +628,82 @@ describe('client_update', () => {
     const text = (result.content as { text: string }[])[0].text;
     expect(text).not.toContain('is published');
     expect(text.startsWith('## Root Cause')).toBe(true);
+  });
+});
+
+// A server started in the home directory outside any repository used to make the
+// home directory its project root, so a stack trace naming ~/anything was read and
+// sent, and the facts walk ran under it. This drives the tool the agent calls, with
+// only the HTTP edge faked, and reads the request that would have left the machine.
+describe('debug_error started in the home directory', () => {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  const cleanup: string[] = [];
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+    for (const d of cleanup.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** A fake home holding a project folder with a source file and a manifest of its own. */
+  function fakeHome() {
+    const home = mkdtempSync(join(tmpdir(), 'debugai-home-'));
+    cleanup.push(home);
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    mkdirSync(join(home, 'proj', 'src'), { recursive: true });
+    writeFileSync(join(home, 'src-secret.js'), 'const SECRET_LINE = 1;\nthrow new Error("boom");\n');
+    writeFileSync(join(home, 'package.json'), JSON.stringify({ dependencies: { 'home-only-dep': '1.0.0' } }));
+    writeFileSync(join(home, 'proj', 'src', 'app.js'), 'const PROJECT_LINE = 1;\nthrow new Error("boom");\n');
+    writeFileSync(join(home, 'proj', 'package.json'), JSON.stringify({ dependencies: { 'project-dep': '1.0.0' } }));
+    return home;
+  }
+
+  const okBody = () => vi.fn().mockResolvedValue(new Response(JSON.stringify({ root_cause: 'x', fixes: [] }),
+    { status: 200, headers: { 'content-type': 'application/json' } }));
+
+  it('reads no file, gathers no facts, and says why', async () => {
+    const home = fakeHome();
+    vi.spyOn(process, 'cwd').mockReturnValue(home);
+    const fetchMock = okBody();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'Error: boom\n    at f (src-secret.js:1:1)' },
+    }) as CallToolResult;
+
+    const raw = fetchMock.mock.calls[0][1].body as string;
+    const body = JSON.parse(raw);
+    expect(body.code_snippet, 'read a file under the home directory').toBeUndefined();
+    expect(body.workspace_facts, 'walked the home directory for manifests').toBeUndefined();
+    expect(raw).not.toContain('SECRET_LINE');
+    expect(raw).not.toContain('home-only-dep');
+    expect(textOf(result)).not.toContain('Read locally:');
+    expect(textOf(result)).toContain(NO_ROOT_BADGE);
+    expect(result.structuredContent).toMatchObject({ local_files_read: [], project: { root: null } });
+  });
+
+  it('still reads when the same server is started in a project folder under home', async () => {
+    // The control: without it the test above would pass for a server that reads nothing at all.
+    const home = fakeHome();
+    vi.spyOn(process, 'cwd').mockReturnValue(join(home, 'proj'));
+    const fetchMock = okBody();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'Error: boom\n    at f (src/app.js:1:1)' },
+    }) as CallToolResult;
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.code_snippet).toContain('PROJECT_LINE');
+    expect(body.workspace_facts.declared_deps).toEqual(['project-dep']);
+    expect(textOf(result)).toContain('Read locally:');
+    expect(textOf(result)).not.toContain(NO_ROOT_BADGE);
   });
 });

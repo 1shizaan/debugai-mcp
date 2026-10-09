@@ -1,10 +1,10 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { gitToplevel, hashPath, resolveProjectId, __resetProjectIdCache } from '../src/project.js';
+import { getProjectRoot, gitToplevel, hashPath, resolveProjectId, __resetProjectIdCache } from '../src/project.js';
 
 // Real temp directories and a real `git init`, not mocks. The whole point of
 // this module is what git actually reports on disk, and a mocked execFileSync
@@ -84,5 +84,61 @@ describe('resolveProjectId', () => {
 
   it('never throws on a path that does not exist', () => {
     expect(() => resolveProjectId(join(root, 'gone'))).not.toThrow();
+  });
+});
+
+// The fallback root is the boundary sourceContext reads inside and the facts walk
+// runs under. Started in the home directory outside a repository it was the home
+// directory itself, so a stack trace naming a file under ~ was read and sent. The
+// same two paths are refused when an agent NAMES them (explicitProject.tooBroad);
+// the fallback goes through that function now. `os.homedir()` reads HOME (or
+// USERPROFILE on Windows) on every call, so a test can make a temp directory home.
+describe('getProjectRoot', () => {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  });
+  const makeHome = (dir: string) => { process.env.HOME = dir; process.env.USERPROFILE = dir; };
+
+  it('is the git toplevel inside a repository', () => {
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    const nested = join(root, 'src');
+    mkdirSync(nested, { recursive: true });
+    expect(getProjectRoot(nested)).toBe(gitToplevel(root));
+  });
+
+  it('is the working directory when it is neither a repository nor too broad', () => {
+    const proj = join(root, 'proj');
+    mkdirSync(proj, { recursive: true });
+    makeHome(root);                          // proj sits UNDER home: allowed
+    expect(getProjectRoot(proj)).toBe(proj);
+  });
+
+  it('is null when the fallback is the home directory', () => {
+    makeHome(root);                          // root is a plain temp dir, not a repository
+    expect(gitToplevel(root)).toBeNull();
+    expect(getProjectRoot(root)).toBeNull();
+  });
+
+  it('is null when the fallback is the filesystem root', () => {
+    expect(getProjectRoot(parse(root).root)).toBeNull();
+  });
+
+  it('is null for a home directory that is itself a repository (dotfiles checkouts are common)', () => {
+    makeHome(root);
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    expect(getProjectRoot(root)).toBeNull();
+    // A subfolder of that repository resolves to its toplevel, which is home: still refused.
+    const sub = join(root, 'dotfiles-sub');
+    mkdirSync(sub, { recursive: true });
+    expect(getProjectRoot(sub)).toBeNull();
+  });
+
+  it('leaves the project id alone, because it is only a hash and changing it would orphan stored memory', () => {
+    makeHome(root);
+    expect(getProjectRoot(root)).toBeNull();
+    expect(resolveProjectId(root)).toBe(hashPath(root));
   });
 });

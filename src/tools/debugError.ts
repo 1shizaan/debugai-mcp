@@ -5,7 +5,7 @@ import { callDebugBackend } from '../backend.js';
 import { mapBackendErrorToToolResult } from '../errors.js';
 import { resolveAuth } from './authGate.js';
 import { basename } from 'node:path';
-import { getProjectId, getProjectRoot } from '../project.js';
+import { getProjectId, getProjectRoot, NO_ROOT_BADGE } from '../project.js';
 import { explicitProject } from '../explicitProject.js';
 import { API_ERROR_MAX_CHARS, fitErrorText } from '../fitErrorText.js';
 import { memorySection } from '../memorySection.js';
@@ -214,8 +214,10 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       const ownSnippet = codeSnippet?.trim() ? codeSnippet : undefined;
       const namedFile = filePath?.trim() ? filePath : undefined;
 
+      // No root means no reads: getProjectRoot() is null when this server started in
+      // the home directory or the filesystem root and nobody named a project.
       let resolved: ReturnType<typeof resolveSourceContext> = null;
-      if (!ownSnippet) {
+      if (!ownSnippet && root) {
         resolved = resolveSourceContext({ errorText, filePath: namedFile, root });
       }
       const snippet = ownSnippet ?? resolved?.snippet;
@@ -302,7 +304,12 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         if (result.framework_detected)   { badges.push(`Framework: ${result.framework_detected}`); }
         // Where memory goes, and which build answered: both invisible on
         // 2026-09-16, when a stale server ran a whole session with memory off.
-        badges.push(`Project: ${basename(root) || root}${explicit ? ` (from ${explicit.source})` : ''}`);
+        if (root) {
+          badges.push(`Project: ${basename(root) || root}${explicit ? ` (from ${explicit.source})` : ''}`);
+        } else {
+          // Said, not silent: an agent that sees this knows to pass projectRoot.
+          badges.push(NO_ROOT_BADGE);
+        }
         if (result.memory_enabled === false) {
           badges.push(`Memory: off${result.memory_disabled_reason ? ` (${result.memory_disabled_reason})` : ''}`);
         }

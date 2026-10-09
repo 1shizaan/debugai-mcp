@@ -39,6 +39,7 @@
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { tooBroad } from './explicitProject.js';
 
 let cached: string | null | undefined;
 
@@ -94,10 +95,25 @@ export function getProjectId(): string | null {
  * files from" can never be two different directories. sourceContext.ts treats
  * this as a hard boundary: a path that resolves outside it is not read, which
  * is what keeps a crafted stack trace from turning into an arbitrary file read.
+ *
+ * **null when that fallback is the home directory or the filesystem root.** An
+ * agent started in `~` outside any repository made `~` the boundary, so a trace
+ * naming `~/.ssh/config:1` was read and sent, and the facts walk ran under it.
+ * `explicitProject` has refused such a root when the agent NAMES one since
+ * 2026-10-01 (`tooBroad`); the fallback is the same decision and goes through
+ * the same function. With no root nothing is read locally and the server answers
+ * from the error text and the project index alone, as it does with no folder open.
+ * The project id is not affected: it is only a hash, and changing it would orphan
+ * the memory already stored under it.
  */
-export function getProjectRoot(cwd: string = process.cwd()): string {
-  return gitToplevel(cwd) ?? cwd;
+export function getProjectRoot(cwd: string = process.cwd()): string | null {
+  const root = gitToplevel(cwd) ?? cwd;
+  return tooBroad(root) ? null : root;
 }
+
+/** What the reply says when no root is usable, so a refusal is visible to the agent. */
+export const NO_ROOT_BADGE =
+  'No local files read: there is no usable project root (none named, or only your home directory or the filesystem root, which are never one). Pass projectRoot to name the project.';
 
 /** Test seam. */
 export function __resetProjectIdCache(): void {
