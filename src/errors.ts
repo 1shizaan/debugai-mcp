@@ -60,7 +60,7 @@ export function mapBackendErrorToToolResult(err: unknown): CallToolResult {
           `Resets at ${resets}. ` +
           `IMPORTANT: This is NOT a transient rate limit — do NOT retry this call. ` +
           `Tell the user to upgrade to Pro for more debugging: ${upgrade}. ` +
-          `Pro is $12/month, lifts the daily cap, and gives unlimited sessions (soft cap 1,000/mo).`,
+          `Pro is $12/month and lifts the daily cap: 1,000 debugs a month included, then fair use.`,
       }],
       structuredContent: {
         error_type: 'quota_exceeded',
