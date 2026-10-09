@@ -109,8 +109,9 @@ Give it an error, get an analysis.
 | Input | Required | Description |
 |-------|----------|-------------|
 | `errorText` | yes | Full error message, exception, or stack trace. A bug with no error text works too: say what you expected, what happened instead, and include the code in between. |
-| `language` | no | `auto` (default), or name it: `javascript`, `typescript`, `python`, `java`, `csharp`, `go`, `rust`, `cpp`, `c`, `php`, `ruby`, `kotlin`, `swift`, `lua`, `shell`, `powershell`, `sql`, `html`, `css`, `scala`, `dart`, `elixir`, `r`, `perl`. Leave it on `auto` unless you have a reason: the server reads the error text and is right about it almost always. |
+| `language` | no | `auto` (default), or name it: `javascript`, `typescript`, `python`, `java`, `csharp`, `go`, `rust`, `cpp`, `c`, `php`, `ruby`, `kotlin`, `swift`, `lua`, `shell`, `powershell`, `sql`, `html`, `css`, `scala`, `dart`, `elixir`, `r`, `perl`. Leave it on `auto` unless you have a reason: the server reads the error text and is right about it almost always. A name that is not on this list (`markdown`, `cobol`) is not an error: it is treated as `auto`. |
 | `codeSnippet` | no | Usually unnecessary, see below. Overrides the local read when given. |
+| `snippetStartLine` | no | With `codeSnippet`: the line of the file that the first line of the snippet is. Pass it when the snippet is a window from the middle of a file. Without it the lines are counted from 1, and an error that says `Line 44` cannot be matched to a 15-line snippet. (2.7) |
 | `filePath` | no | Path to the file that threw. An absolute path also names the repository the error belongs to. |
 | `projectRoot` | no | Absolute path of the repository, when the agent was started somewhere else. Project memory and local reads are scoped to it. (2.6) |
 | `reproCommand` | no | The command that shows the failure: a test, a script, a curl. Fix #1 is aimed at making it pass, and each fix's check becomes this command instead of a syntax check. DebugAI never runs it. (2.6) |
@@ -307,6 +308,30 @@ package. Client releases are only for things that change on your machine.
 
 Recent server-side work, all of it live for agents already:
 
+- **A failure reported by an agent is no longer refused as "not an error"** because
+  its wording was not on the engine's list of error phrases. `No module named`,
+  Ubuntu's `Command 'x' not found`, a browser's `net::ERR_*`, and compilers that
+  print `Line 44: Undefined symbol` without the word "error" were all turned away.
+  A prompt, a bare path or a stub is still refused.
+- **The answer says when it never saw the line the error names.** An error that
+  reports `Line 528` against a 19-line snippet used to be explained from lines
+  1-19. It is now answered at low confidence, with a sentence saying which lines
+  were supplied and which were reported, and it is not cached, so sending the
+  lines it asks for gets a fresh analysis.
+- **A missing command is no longer assumed to be a script in your project.**
+  `curl`, `winget` and `powershell` that a stripped PATH could not find are called
+  by full path (they ship with Windows) instead of being installed; PowerShell
+  handed to Command Prompt (`$ws`, `Get-ChildItem`) is called a wrong shell, not
+  a missing tool; an unknown name is looked for before it is run.
+- **A Playwright timeout is no longer blamed on your app.** "Waiting for visible,
+  enabled and stable" is the driver reporting it could not act. The answer leads
+  with the check that tells "not on the page" from "on the page and covered or
+  moving", and offers `force: true` only as a labelled test workaround.
+- npm's `ENOENT ... package.json` is answered with `npm --prefix`, not a `cd` into
+  the folder the error already names. A path that points at nothing is walked up
+  to the folder that exists before anything is reinstalled. A browser's
+  `ERR_CONNECTION_REFUSED` on localhost gets the same reasoning as Node's, and the
+  advice to run the server where its first lines can be read.
 - `ModuleNotFoundError` no longer opens with an install command. A read of every
   one we had answered found five of eight rejected by the agent that received
   them, for three different causes needing three different fixes: the package
@@ -324,6 +349,15 @@ Recent server-side work, all of it live for agents already:
 
 **2.7.0** - Built from a second agent's field report, this time from a greenfield
 project on libraries newer than any model's training data (2026-09-20).
+
+- **`snippetStartLine`** on `debug_error`. A snippet you pass has no header, so it
+  was always counted from line 1 and a window from the middle of a file could not
+  be matched to the line the error names. Say where it starts. A file this server
+  reads itself already says so in its own header.
+- **`language` takes any string.** A name outside the list used to fail the call
+  and send the agent back to retry with `auto`; it is now treated as `auto`.
+  `markdown` was the one that kept happening. `lua`, `dart`, `elixir`, `r` and `perl` were also being collapsed to
+  `unknown` by the gateway, which hid them in the language counts; they are kept.
 
 - **An edit names the file its code is in.** This server resolves every file a
   stack trace names and sends them together; each fix's `edits[].file` used to
