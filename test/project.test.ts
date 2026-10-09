@@ -130,10 +130,24 @@ describe('getProjectRoot', () => {
     makeHome(root);
     execFileSync('git', ['init', '-q'], { cwd: root });
     expect(getProjectRoot(root)).toBeNull();
-    // A subfolder of that repository resolves to its toplevel, which is home: still refused.
-    const sub = join(root, 'dotfiles-sub');
-    mkdirSync(sub, { recursive: true });
-    expect(getProjectRoot(sub)).toBeNull();
+  });
+
+  it('a project folder inside such a dotfiles checkout is its own root, not refused and not home', () => {
+    // Started in ~/code/x with ~ a repository: the toplevel is home (refused), the folder is not.
+    makeHome(root);
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    const proj = join(root, 'code', 'x');
+    mkdirSync(proj, { recursive: true });
+    expect(gitToplevel(proj)).toBe(gitToplevel(root));
+    expect(getProjectRoot(proj)).toBe(proj);
+  });
+
+  it('is null for a folder above home, which contains it', () => {
+    const proj = join(root, 'a', 'b');
+    mkdirSync(proj, { recursive: true });
+    makeHome(proj);                          // home is root/a/b, so root/a and root are above it
+    expect(getProjectRoot(join(root, 'a'))).toBeNull();
+    expect(getProjectRoot(root)).toBeNull();
   });
 
   it('leaves the project id alone, because it is only a hash and changing it would orphan stored memory', () => {

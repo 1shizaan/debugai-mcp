@@ -105,9 +105,15 @@ export function getProjectId(): string | null {
  * from the error text and the project index alone, as it does with no folder open.
  * The project id is not affected: it is only a hash, and changing it would orphan
  * the memory already stored under it.
+ *
+ * A git toplevel that is too broad is not the end of it: a dotfiles checkout makes
+ * `~` the toplevel of every folder under it, and a server started in `~/code/x`
+ * should read `~/code/x`, not nothing. The toplevel is dropped and the working
+ * directory is judged on its own. (The id still hashes the toplevel, as it always did.)
  */
 export function getProjectRoot(cwd: string = process.cwd()): string | null {
-  const root = gitToplevel(cwd) ?? cwd;
+  const top = gitToplevel(cwd);
+  const root = top && !tooBroad(top) ? top : cwd;
   return tooBroad(root) ? null : root;
 }
 

@@ -180,7 +180,8 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           .describe(
             'Absolute path of the repository this error came from. Pass it when you were ' +
             'started somewhere other than that repository: project memory and local file reads ' +
-            'are scoped to it, and without it they are scoped to the folder this server started in.',
+            'are scoped to it (never your home directory or the filesystem root), and without it they are ' +
+            'scoped to the folder this server started in.',
           ),
       },
       annotations: {

@@ -15,6 +15,7 @@ import {
   sameDirectory,
   samePath,
   tooBroad,
+  tooBroadFor,
 } from '../src/explicitProject.js';
 import { gitToplevel, hashPath } from '../src/project.js';
 
@@ -153,12 +154,93 @@ describe('samePath', () => {
     expect(samePath('/a/B', '/a/b')).toBe(process.platform === 'win32');
   });
 
-  it('both checks that compare directories go through it', () => {
-    // Text, because the two spellings cannot be produced on this machine.
+  it('both checks that compare directories go through a case-folding comparison', () => {
+    // Text, because the two spellings cannot be produced on this machine. Whether a directory is
+    // the same one goes through samePath; whether it is too broad goes through tooBroadFor, which
+    // folds drive-letter case itself and is pure so the editor can ask it with an injected home.
     const src = readFileSync(new URL('../src/explicitProject.ts', import.meta.url), 'utf8');
-    expect(src).toContain('return samePath(r, parse(r).root) || samePath(r, real(homedir()));');
+    expect(src).toContain('return tooBroadFor(real(root), real(homedir()));');
     expect(src).toContain('return samePath(real(a), real(b));');
     expect(src).not.toMatch(/real\([ab]\) === real\(/);
     expect(src).not.toMatch(/r === (parse|real)\(/);
+  });
+});
+
+// "Too broad" is the filesystem root, home, and everything that CONTAINS home, plus
+// the Windows profile as WSL shows it. It was the first two only, so a server started
+// in /mnt/c/Users/<name> (where many WSL terminals begin) could read .ssh, .aws and
+// AppData, and /home, /Users and C:\Users were accepted as project roots.
+describe('tooBroadFor: pure strings, so the editor can ask the same question', () => {
+  const HOME = '/home/me';
+
+  it.each([
+    '/', '', '/home', '/home/me', '/home/me/', 'C:\\', 'D:/',
+    '/mnt/c', '/mnt/d', '/mnt/c/Users', '/mnt/c/Users/me', '/mnt/c/users/ME', '/MNT/C/USERS',
+  ])('%s is too broad', (p) => {
+    expect(tooBroadFor(p, HOME, false), p).toBe(true);
+  });
+
+  it.each([
+    '/home/me/code', '/home/me/code/x', '/home/other', '/srv/app', '/workspaces/proj',
+    '/mnt/c/Users/me/projects/app', '/mnt/c/code', '/mnt/wsl/stuff', '/tmp/x',
+  ])('%s is a project', (p) => {
+    expect(tooBroadFor(p, HOME, false), p).toBe(false);
+  });
+
+  it('every folder above a Windows home is too broad, in either slash and any drive-letter case', () => {
+    const WHOME = 'C:\\Users\\me';
+    for (const p of ['C:\\Users', 'c:/users', 'C:\\Users\\me', 'c:\\users\\me\\', 'C:\\']) {
+      expect(tooBroadFor(p, WHOME, false), p).toBe(true);
+    }
+    for (const p of ['C:\\Users\\me\\code', 'c:/users/me/code/x', 'D:\\work', 'C:\\Users\\other']) {
+      expect(tooBroadFor(p, WHOME, false), p).toBe(false);
+    }
+  });
+
+  it('without a home it still refuses the roots and the WSL profile, and nothing else', () => {
+    expect(tooBroadFor('/', '', false)).toBe(true);
+    expect(tooBroadFor('/mnt/c/Users/me', '', false)).toBe(true);
+    expect(tooBroadFor('/home', '', false)).toBe(false);
+  });
+
+  it('on Windows every path is compared without regard to case', () => {
+    expect(tooBroadFor('\\\\SERVER\\Share\\Me', '\\\\server\\share\\me', true)).toBe(true);
+  });
+
+  it('tooBroad asks it with the real home directory and resolves symlinks first', () => {
+    expect(tooBroad(homedir())).toBe(true);
+    expect(tooBroad(parentOf(homedir()))).toBe(true);
+    expect(tooBroad(join(base, 'airgapai'))).toBe(false);
+  });
+});
+
+const parentOf = (p: string): string => join(p, '..');
+
+describe('a named root inside a dotfiles checkout', () => {
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  });
+
+  it('is the folder named, not refused because the git toplevel is home', () => {
+    // ~ is a repository (a dotfiles checkout) and the agent names ~/code/x. Its toplevel is ~,
+    // which is refused, so it resolved to ~ and was refused: the reply's own advice (pass
+    // projectRoot) could never work for this user.
+    process.env.HOME = base;
+    process.env.USERPROFILE = base;
+    execFileSync('git', ['init', '-q'], { cwd: base });
+    const proj = join(base, 'code', 'x');
+    mkdirSync(proj, { recursive: true });
+    const p = explicitProject({ projectRoot: proj });
+    expect(p).not.toBeNull();
+    expect(sameDirectory(p!.root, proj)).toBe(true);
+    expect(p!.id).toBe(hashRoot(p!.root));
+  });
+
+  it('home itself, named, is still refused', () => {
+    process.env.HOME = base;
+    process.env.USERPROFILE = base;
+    execFileSync('git', ['init', '-q'], { cwd: base });
+    expect(explicitProject({ projectRoot: base })).toBeNull();
   });
 });

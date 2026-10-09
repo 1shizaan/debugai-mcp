@@ -18,9 +18,9 @@
  * Both are agent-supplied, the same trust as the error text the agent already
  * sends and less than the filesystem the agent can already read. What is
  * refused is breadth: a root must be an existing directory, and neither the
- * filesystem root nor the home directory may be one, because a root is also
- * the boundary local source reads are held inside, and "everything" is not a
- * boundary. A path that is not inside a git repository names no project from
+ * filesystem root, the home directory nor any folder above it (nor the Windows
+ * profile as WSL shows it) may be one, because a root is also the boundary local
+ * source reads are held inside, and "everything" is not a boundary. A path that is not inside a git repository names no project from
  * filePath at all, so a stray absolute path cannot move the boundary.
  *
  * Never throws. A debug answer without memory is worth far more than no answer.
@@ -32,7 +32,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, parse, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 export type ExplicitSource = 'projectRoot' | 'filePath';
 
@@ -89,10 +89,37 @@ export function samePath(a: string, b: string, windows: boolean = process.platfo
   return fold(a) === fold(b);
 }
 
-/** The filesystem root or the home directory: too wide to be a boundary. */
+/**
+ * Whether `root` is too wide to be a boundary, given where home is. Pure strings,
+ * so the editor's Debug in Browser check (anchorPath.ts, which injects home) asks
+ * the same question the MCP servers do instead of keeping a second copy.
+ *
+ * Too wide is: the filesystem root or a drive root; the home directory; and every
+ * folder ABOVE home (`/home`, `/Users`, `C:\Users`), because home is inside each
+ * of them; and the Windows drive and profile as WSL shows them (`/mnt/c`,
+ * `/mnt/c/Users`, `/mnt/c/Users/<name>`), where many WSL terminals start and whose
+ * `.ssh`, `.aws` and AppData would otherwise be readable. A project UNDER home, or
+ * under `/mnt/c/Users/<name>/`, is not wide and stays allowed.
+ *
+ * Both separators are read on any host. A drive-letter path is compared without
+ * regard to case, as is everything on Windows: `git` prints `C:/Users/me` and VS
+ * Code hands down `c:\Users\me`.
+ */
+export function tooBroadFor(root: string, home: string, windows: boolean = process.platform === 'win32'): boolean {
+  const slash = (p: string): string => (p ?? '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const r0 = slash(root);
+  const h0 = slash(home);
+  const fold = windows || /^[a-z]:/i.test(r0) || /^[a-z]:/i.test(h0);
+  const r = fold ? r0.toLowerCase() : r0;
+  const h = fold ? h0.toLowerCase() : h0;
+  if (r === '' || /^[a-z]:$/i.test(r)) { return true; }        // `/`, `C:\`
+  if (h !== '' && (h === r || h.startsWith(`${r}/`))) { return true; }   // home, or a folder above it
+  return /^\/mnt\/[a-z](\/users(\/[^/]+)?)?$/i.test(r0);     // WSL's view of the Windows profile
+}
+
+/** The filesystem root, the home directory, or a folder above home: too wide to be a boundary. See tooBroadFor. */
 export function tooBroad(root: string): boolean {
-  const r = real(root);
-  return samePath(r, parse(r).root) || samePath(r, real(homedir()));
+  return tooBroadFor(real(root), real(homedir()));
 }
 
 const memo = new Map<string, ExplicitProject | null>();
@@ -115,7 +142,12 @@ export function explicitProject(
   try {
     const named = opts.projectRoot?.trim();
     if (named && isAbsolute(named) && isDirectory(named)) {
-      const root = toplevel(named) ?? real(named);
+      // A dotfiles checkout makes `~` the git toplevel of everything under it. That
+      // toplevel is refused, but the folder the agent NAMED is not: fall back to it,
+      // or `projectRoot=~/code/x` resolved to `~` and was refused, and the advice in
+      // the reply (pass projectRoot) could never work for such a user.
+      const top = toplevel(named);
+      const root = top && !tooBroad(top) ? top : real(named);
       if (!tooBroad(root)) found = { root, id: hashRoot(root), source: 'projectRoot' };
     }
     const file = opts.filePath?.trim();

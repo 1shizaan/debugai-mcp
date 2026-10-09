@@ -142,10 +142,12 @@ describe('the privacy sentences describe what the code does', () => {
     expect(flat).toContain('an absolute `filePath` is sent as written');
   });
 
-  it('outside a repository the folder becomes the project, and only home and the root are refused', () => {
+  it('outside a repository the folder becomes the project, and home, the folders above it and the root are refused', () => {
     const ep = read('src/explicitProject.ts');
-    expect(ep).toMatch(/const root = toplevel\(named\) \?\? real\(named\);/);
-    expect(ep).toMatch(/samePath\(r, parse\(r\)\.root\) \|\| samePath\(r, real\(homedir\(\)\)\)/);
+    // A named folder wins over a git toplevel that is too broad (a dotfiles checkout at home).
+    expect(ep).toMatch(/const root = top && !tooBroad\(top\) \? top : real\(named\);/);
+    expect(ep).toContain('return tooBroadFor(real(root), real(homedir()));');
+    expect(flat).toContain('Only your home directory, the folders above it and the filesystem root are refused');
     expect(flat).not.toMatch(/Outside any repository, and in your home directory, it stays silent/);
     expect(flat).toContain('Outside a repository the folder itself becomes the project');
   });
@@ -241,5 +243,29 @@ describe('the 2.7.0 notes are dated by their report, not as a release', () => {
   it('the server-side list does not claim to be live already', () => {
     expect(flat).toContain('Recent server-side work. Each item reaches agents with no upgrade once the engine release that carries it is deployed:');
     expect(flat).not.toContain('all of it live for agents already');
+  });
+});
+
+// Release check 4 (2026-10-09), section 2.2 and 2.4: where the home-directory refusal is said.
+describe('the refusal of a home or root project root is documented where it applies', () => {
+  it('the README says local reads and facts need a project root, and what happens without one', () => {
+    expect(flat).toContain('there is no boundary to read inside, so nothing local is read and the reply says so; pass `projectRoot` to name the project');
+    expect(flat).toContain('The project manifests described under [Limits and honesty](#limits-and-honesty) are read on every `debug_error` call that has a project root.');
+    expect(flat).toContain('Every `debug_error` call that has a project root also reads what the project declares');
+    // And that is what the tool does: no read, no facts, and the reply says so.
+    const tool = read('src/tools/debugError.ts');
+    expect(tool).toMatch(/if \(!ownSnippet && root\)/);
+    expect(tool).toContain('badges.push(NO_ROOT_BADGE)');
+  });
+
+  it('the 2.7.0 notes carry the change, including the folders above home and WSL', () => {
+    const notes = README.slice(README.indexOf('**2.7.0** -'), README.indexOf('**2.6.0** -'));
+    expect(notes).toContain('Your home directory is not a project.');
+    expect(notes).toContain('`/mnt/c/Users/<name>`');
+    expect(notes).toContain('A dotfiles checkout no longer defeats `projectRoot`');
+  });
+
+  it('the tool description says so to the agent that has to pass projectRoot', () => {
+    expect(read('src/tools/debugError.ts')).toContain('(never your home directory or the filesystem root)');
   });
 });
