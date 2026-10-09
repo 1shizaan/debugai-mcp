@@ -13,6 +13,24 @@ import { resolveSourceContext } from '../sourceContext.js';
 import { gatherWorkspaceFacts } from '../gatherWorkspaceFacts.js';
 import { clientUpdateBanner } from '../clientUpdate.js';
 
+// `language` is a hint: the engine reads the language off the error text. A name
+// outside this list is therefore never a reason to refuse the call, and it goes
+// out as 'auto'. A closed zod enum here did refuse it, so an agent that passed
+// "markdown" was told its input was invalid and had to retry (the list had
+// already been widened once for "java"). Mapping, not the schema, is what keeps
+// debug_logs.language a closed set. The bundled server holds an identical copy.
+const LANGUAGE_HINTS = [
+  'javascript', 'typescript', 'python', 'go', 'rust',
+  'java', 'csharp', 'cpp', 'c', 'php', 'ruby', 'kotlin', 'swift',
+  'lua', 'shell', 'powershell', 'sql', 'html', 'css', 'scala',
+  'dart', 'elixir', 'r', 'perl',
+] as const;
+
+function languageHint(raw: string): string {
+  const name = raw.trim().toLowerCase();
+  return (LANGUAGE_HINTS as readonly string[]).includes(name) ? name : 'auto';
+}
+
 // Tri-state verification labeling (docs/plan-v2-contract-phase1.md §1).
 // The null case is rendered ON PURPOSE: a confidence number nothing checked
 // must never look the same as one that was mechanically verified.
@@ -109,44 +127,13 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           .min(1)
           .describe('The full error message, exception, or stack trace text.'),
         language: z
-          .enum([
-            // Widened 2026-09-13 from six values. The six were javascript,
-            // typescript, python, go, rust and auto, and the omissions were not
-            // theoretical: a production read of the ten highest-volume accounts
-            // found FOUR of them debugging a language this enum refused.
-            //
-            //   java    16 debugs, one account, Spring Boot + Maven all week
-            //   csharp  15 debugs, two accounts, .NET / MSBuild / YARP
-            //   css     13 debugs, one account, @font-face
-            //   lua      8 debugs, one account, FiveM
-            //
-            // One of them told us so in their own outcome report: "the tool's
-            // Java language enum rejected 'java'; auto detection was required."
-            // That is the failure being visible. The quiet half is worse - a
-            // refused value means the agent retries with 'auto', so
-            // debug_logs.language records `unknown` for every one of those
-            // rows, and every language chart we have under-counts exactly the
-            // languages we do not list.
-            //
-            // The engine already reads javac/Maven and MSBuild diagnostics in
-            // error_location.py, so java and csharp were first-class on the
-            // server and unsayable by the client.
-            //
-            // 'auto' stays the default and stays correct: the SERVER decides
-            // language from the error text, this is a hint. The set is closed
-            // so the column stays a closed set (same argument as
-            // index_language.py), and widening it is a one-line change.
-            'javascript', 'typescript', 'python', 'go', 'rust',
-            'java', 'csharp', 'cpp', 'c', 'php', 'ruby', 'kotlin', 'swift',
-            'lua', 'shell', 'powershell', 'sql', 'html', 'css', 'scala',
-            'dart', 'elixir', 'r', 'perl',
-            'auto',
-          ])
+          .string()
           .default('auto')
           .describe(
-            'Source language. Use "auto" to let DebugAI detect from the error — ' +
-            'auto is correct for almost every case, because the server reads the ' +
-            'error text and the client cannot see it more clearly than that.',
+            'Source language hint, one of: ' + LANGUAGE_HINTS.join(', ') + '. Leave it at ' +
+            '"auto" (the default) unless you have a reason: the server reads the error text ' +
+            'and the client cannot see it more clearly than that. A name outside the list is ' +
+            'not an error, it is treated as "auto".',
           ),
         codeSnippet: z
           .string()
@@ -155,6 +142,16 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             'Optional. Surrounding code near where the error was thrown. Usually unnecessary — ' +
             'the server reads the files the trace names off local disk. Supply it only when the ' +
             'relevant code is somewhere the trace does not name; it overrides the local read.',
+          ),
+        snippetStartLine: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(
+            'Optional, with codeSnippet. The line of the file that the FIRST line of codeSnippet ' +
+            'is. Pass it when the snippet is a window from the middle of a file: without it the ' +
+            'lines are counted from 1, and a line number in the error will not match them.',
           ),
         filePath: z
           .string()
@@ -191,7 +188,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
         title: 'Debug Error',
       },
     },
-    async ({ errorText, language, codeSnippet, filePath, projectRoot, reproCommand, expected }) => {
+    async ({ errorText, language, codeSnippet, snippetStartLine, filePath, projectRoot, reproCommand, expected }) => {
       const gate = await resolveAuth(config);
       if (!gate.ok) return gate.result;
 
@@ -235,6 +232,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       // is null and a prompt identical to today's.
       const workspaceFacts = gatherWorkspaceFacts(root);
       const fitted = fitErrorText(errorText);
+      const hint = languageHint(language);
 
       try {
         const result = await callDebugBackend(
@@ -243,8 +241,13 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             // whole and refused with a 400. Source resolution above read the
             // full text, so no path it names is lost to the cut.
             error_message:  fitted.text,
-            language:       language !== 'auto' ? language : undefined,
+            language:       hint !== 'auto' ? hint : undefined,
             code_snippet:   snippet,
+            // Where the agent's own window begins. A snippet this server read
+            // itself says so in its section headers, so it is sent only for the
+            // agent's: the engine counted every agent snippet from line 1 until
+            // this existed, and answered "Line 44" about lines 1-15.
+            code_snippet_start_line: ownSnippet ? snippetStartLine : undefined,
             file_path:      effectiveFilePath,
             // Project scope. Team Error Memory is project-scoped in the engine:
             // without this, recurrence is never recalled and never recorded, and

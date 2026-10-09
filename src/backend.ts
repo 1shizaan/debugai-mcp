@@ -4,6 +4,9 @@ import type { LookupResult } from './lookupAnswer.js';
 export interface DebugRequest {
   error_message: string;
   code_snippet?: string;
+  // 1-based line of the file that code_snippet's first line is. Absent means the
+  // engine counts from 1, which is right only for a snippet that starts the file.
+  code_snippet_start_line?: number;
   language?: string;
   file_path?: string;
   project_id?: string;

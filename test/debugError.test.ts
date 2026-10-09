@@ -427,6 +427,31 @@ describe('debug_error sends local source when the agent gave none', () => {
     expect(result.structuredContent).toMatchObject({ local_files_read: [] });
   });
 
+  it('says where the agent\'s own window starts, and never where one it read itself does', async () => {
+    // An agent snippet carries no header, and the engine counted it from line 1:
+    // "Line 44" was answered from a 15-line window as if it began the file. A
+    // window this server read says where it starts in its own section header,
+    // and a second number beside that would be a second answer to one question.
+    const fetchMock = okResponse();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'Line 44: boom', codeSnippet: 'const mine = 1', snippetStartLine: 40 },
+    });
+    await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'at f (packages/mcp/src/constants.ts:1:1)', snippetStartLine: 40 },
+    });
+
+    const own = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const read = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(own.code_snippet_start_line).toBe(40);
+    expect(read.code_snippet).toContain('DEFAULT_API_BASE');
+    expect(read.code_snippet_start_line).toBeUndefined();
+  });
+
   it('treats a blank codeSnippet as none: what it read is what it sends', async () => {
     // An agent fills an optional string with "" as readily as it leaves it
     // out. `??` took that for a snippet: the file was read, the reply said
@@ -476,50 +501,34 @@ describe('debug_error sends local source when the agent gave none', () => {
 });
 
 /*
- * The languages production actually sends.
+ * `language` is a hint, never a reason to refuse the call.
  *
- * `language` was a six-value enum until 2026-09-13 and four of the ten
- * highest-volume accounts were debugging something it refused. One of them
- * said so in an outcome report: "the tool's Java language enum rejected
- * 'java'; auto detection was required."
- *
- * Read off the PUBLISHED schema through a connected server, because that is
- * the artefact an agent validates against - not the zod object, which could
- * be correct while the thing on the wire is not.
- *
- * Pinned by the evidence rather than by taste, so shrinking the set means
- * deleting a row somebody's real session is named in.
+ * It was a closed enum until 2026-10-08: an agent that passed "markdown" was
+ * told its input was invalid and had to retry with "auto" (the list had been
+ * widened for "java" on 2026-09-13 for the same reason). Read off what reaches
+ * the API, which is what the engine and debug_logs see.
  */
-describe('the language enum covers what people actually debug', () => {
-  const OBSERVED: Array<[string, string]> = [
-    ['java', 'chumaneshkatta, 16 debugs, Spring Boot + Maven'],
-    ['csharp', 'wavoinfinity + salmankabir, 15 debugs, .NET / MSBuild / YARP'],
-    ['css', 'santamark14, 13 debugs, @font-face'],
-    ['lua', 'jtearnest94, 8 debugs, FiveM'],
-    ['html', 'santamark14, the same sessions as the css rows'],
-    ['powershell', 'rayanne, santamark14, salmankabir - the most common shell in the data'],
-  ];
-
-  async function languageSchema(): Promise<{ enum?: string[]; default?: string }> {
+describe('the language hint', () => {
+  it('keeps a known name (lowercased) and sends anything else as auto, never refusing', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(
+      JSON.stringify({ root_cause: 'x', fixes: [] }), { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
     const { client } = await connectedClient();
-    const { tools } = await client.listTools();
-    const tool = tools.find(t => t.name === 'debug_error')!;
-    return (tool.inputSchema.properties as Record<string, { enum?: string[]; default?: string }>).language;
-  }
 
-  it.each(OBSERVED)('accepts %s', async (lang, _why) => {
-    const schema = await languageSchema();
-    expect(schema.enum).toContain(lang);
-  });
+    const sent = async (language: string) => {
+      const result = await client.callTool({
+        name: 'debug_error', arguments: { errorText: 'boom', language },
+      }) as CallToolResult;
+      expect(result.isError, `language ${JSON.stringify(language)} was refused`).toBeFalsy();
+      return JSON.parse(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1].body).language;
+    };
 
-  it('still defaults to auto, because the server decides and the client only hints', async () => {
-    expect((await languageSchema()).default).toBe('auto');
-  });
-
-  it('is still a closed set - widening is not opening', async () => {
-    const schema = await languageSchema();
-    expect(Array.isArray(schema.enum)).toBe(true);
-    expect(schema.enum).not.toContain('klingon');
+    expect(await sent(' Python ')).toBe('python');
+    expect(await sent('csharp')).toBe('csharp');
+    expect(await sent('markdown')).toBeUndefined();
+    expect(await sent('')).toBeUndefined();
+    expect(await sent('auto')).toBeUndefined();
   });
 });
 
