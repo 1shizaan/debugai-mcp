@@ -119,7 +119,7 @@ export function getProjectRoot(cwd: string = process.cwd()): string | null {
 
 /** What the reply says when no root is usable, so a refusal is visible to the agent. */
 export const NO_ROOT_BADGE =
-  'No local files read: there is no usable project root (none named, or only your home directory or the filesystem root, which are never one). Pass projectRoot to name the project.';
+  'No local files read: there is no usable project root (none named, or only your home directory, a folder above it or the filesystem root, which are never one). Pass projectRoot to name the project.';
 
 /** Test seam. */
 export function __resetProjectIdCache(): void {

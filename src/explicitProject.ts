@@ -98,8 +98,10 @@ export function samePath(a: string, b: string, windows: boolean = process.platfo
  * folder ABOVE home (`/home`, `/Users`, `C:\Users`), because home is inside each
  * of them; and the Windows drive and profile as WSL shows them (`/mnt/c`,
  * `/mnt/c/Users`, `/mnt/c/Users/<name>`), where many WSL terminals start and whose
- * `.ssh`, `.aws` and AppData would otherwise be readable. A project UNDER home, or
- * under `/mnt/c/Users/<name>/`, is not wide and stays allowed.
+ * `.ssh`, `.aws` and AppData would otherwise be readable; and the same seen from
+ * Windows: a UNC server or share (`\\server\share`) and a WSL distribution
+ * (`\\wsl.localhost\Ubuntu`, its `/home` and `/home/<name>`). A project UNDER home, or
+ * under `/mnt/c/Users/<name>/` or a share, is not wide and stays allowed.
  *
  * Both separators are read on any host. A drive-letter path is compared without
  * regard to case, as is everything on Windows: `git` prints `C:/Users/me` and VS
@@ -113,6 +115,10 @@ export function tooBroadFor(root: string, home: string, windows: boolean = proce
   const r = fold ? r0.toLowerCase() : r0;
   const h = fold ? h0.toLowerCase() : h0;
   if (r === '' || /^[a-z]:$/i.test(r)) { return true; }        // `/`, `C:\`
+  // A network share or a WSL distribution seen from Windows is a whole filesystem, as wide as a
+  // drive: `\\server`, `\\server\share`, `\\wsl.localhost\Ubuntu`, and the Linux home folders in it.
+  if (/^\/\/[^/]+(\/[^/]+)?$/.test(r0)) { return true; }
+  if (/^\/\/(wsl\.localhost|wsl\$)\/[^/]+(\/home(\/[^/]+)?)?$/i.test(r0)) { return true; }
   if (h !== '' && (h === r || h.startsWith(`${r}/`))) { return true; }   // home, or a folder above it
   return /^\/mnt\/[a-z](\/users(\/[^/]+)?)?$/i.test(r0);     // WSL's view of the Windows profile
 }
@@ -148,7 +154,10 @@ export function explicitProject(
       // the reply (pass projectRoot) could never work for such a user.
       const top = toplevel(named);
       const root = top && !tooBroad(top) ? top : real(named);
-      if (!tooBroad(root)) found = { root, id: hashRoot(root), source: 'projectRoot' };
+      // The id stays the git toplevel's, as project.ts's resolveProjectId and a debug_error
+      // with no projectRoot compute it, so the hook and a debug of one failure still share
+      // one memory. Only the READ boundary narrows to the folder named.
+      if (!tooBroad(root)) found = { root, id: hashRoot(top ?? root), source: 'projectRoot' };
     }
     const file = opts.filePath?.trim();
     if (!found && allowFilePath && file && isAbsolute(file)) {

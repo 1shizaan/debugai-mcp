@@ -266,6 +266,25 @@ describe('the refusal of a home or root project root is documented where it appl
   });
 
   it('the tool description says so to the agent that has to pass projectRoot', () => {
-    expect(read('src/tools/debugError.ts')).toContain('(never your home directory or the filesystem root)');
+    expect(read('src/tools/debugError.ts')).toContain('(never your home directory, a folder above it or the filesystem root)');
+  });
+});
+
+describe('the no-root reply and the notes say "a folder above it", as the rule does', () => {
+  it('both servers\' NO_ROOT_BADGE names the folders above home', () => {
+    const badge = (p: string) => read(p).match(/export const NO_ROOT_BADGE =\s*'([^']+)'/)?.[1] ?? '';
+    for (const p of ['src/project.ts', '../../apps/extension/src/mcp/project.ts']) {
+      expect(badge(p), p).toContain('your home directory, a folder above it or the filesystem root');
+    }
+  });
+
+  it('the 2.7.0 note names the network share and the WSL distribution', () => {
+    const notes = README.slice(README.indexOf('**2.7.0** -'), README.indexOf('**2.6.0** -'));
+    expect(notes).toContain('a network share or a WSL distribution');
+  });
+
+  it('and the extension changelog says the same of the bundled server', () => {
+    const log = readFileSync(join(ROOT, '../../apps/extension/CHANGELOG.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(log).toContain('for your home directory, a folder above it or the filesystem root');
   });
 });

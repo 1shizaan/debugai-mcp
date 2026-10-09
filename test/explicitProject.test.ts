@@ -17,7 +17,7 @@ import {
   tooBroad,
   tooBroadFor,
 } from '../src/explicitProject.js';
-import { gitToplevel, hashPath } from '../src/project.js';
+import { gitToplevel, hashPath, resolveProjectId } from '../src/project.js';
 
 let base: string;
 let repo: string;
@@ -197,6 +197,26 @@ describe('tooBroadFor: pure strings, so the editor can ask the same question', (
     }
   });
 
+  it('a network share or a WSL distribution seen from Windows is a whole filesystem, so it is too broad', () => {
+    // `\\server\share` and `\\wsl.localhost\Ubuntu` passed: no drive letter, not home, not under /mnt.
+    for (const p of [
+      '\\\\server', '\\\\server\\share', '\\\\server\\share\\', '//server/share',
+      '\\\\wsl.localhost\\Ubuntu', '\\\\wsl.localhost\\Ubuntu\\home', '\\\\wsl.localhost\\Ubuntu\\home\\me',
+      '\\\\wsl$\\Ubuntu', '\\\\wsl$\\Ubuntu\\home\\me', '\\\\WSL.LOCALHOST\\Debian\\HOME\\Me',
+    ]) {
+      expect(tooBroadFor(p, 'C:\\Users\\me', false), p).toBe(true);
+    }
+  });
+
+  it('a project on a share, or inside a WSL home, is still a project', () => {
+    for (const p of [
+      '\\\\server\\share\\proj', '\\\\server\\share\\a\\b',
+      '\\\\wsl.localhost\\Ubuntu\\home\\me\\code', '\\\\wsl$\\Ubuntu\\srv\\app', '\\\\wsl.localhost\\Ubuntu\\home\\me\\code\\x',
+    ]) {
+      expect(tooBroadFor(p, 'C:\\Users\\me', false), p).toBe(false);
+    }
+  });
+
   it('without a home it still refuses the roots and the WSL profile, and nothing else', () => {
     expect(tooBroadFor('/', '', false)).toBe(true);
     expect(tooBroadFor('/mnt/c/Users/me', '', false)).toBe(true);
@@ -234,7 +254,22 @@ describe('a named root inside a dotfiles checkout', () => {
     const p = explicitProject({ projectRoot: proj });
     expect(p).not.toBeNull();
     expect(sameDirectory(p!.root, proj)).toBe(true);
+    // The READ boundary is the folder named; the ID is the toplevel's, the same one project.ts's
+    // resolveProjectId and a debug_error with no projectRoot compute, so the hook and a debug of
+    // one failure share one memory instead of splitting it in two.
+    expect(p!.id).toBe(hashPath(gitToplevel(proj)!));
+    expect(p!.id).toBe(resolveProjectId(proj));
+    expect(p!.id).not.toBe(hashRoot(p!.root));
+  });
+
+  it('outside a repository the id is still the folder\'s own', () => {
+    process.env.HOME = join(base, 'elsewhere');
+    process.env.USERPROFILE = join(base, 'elsewhere');
+    const plain = join(base, 'plain');
+    mkdirSync(plain, { recursive: true });
+    const p = explicitProject({ projectRoot: plain });
     expect(p!.id).toBe(hashRoot(p!.root));
+    expect(p!.id).toBe(resolveProjectId(plain));
   });
 
   it('home itself, named, is still refused', () => {
