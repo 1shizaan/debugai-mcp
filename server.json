@@ -22,6 +22,27 @@
           "format": "string",
           "isSecret": true,
           "name": "DEBUGAI_API_KEY"
+        },
+        {
+          "description": "Optional. API base URL, for a staging or self-hosted setup. Defaults to DebugAI production.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEBUGAI_API_BASE"
+        },
+        {
+          "description": "Optional. Deadline in milliseconds for a debug_error call. Defaults to 150000.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEBUGAI_TIMEOUT_MS"
+        },
+        {
+          "description": "Optional. Alternate location for the config file that holds the stored key. Defaults to ~/.debugai/config.json.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEBUGAI_CONFIG_PATH"
         }
       ]
     }

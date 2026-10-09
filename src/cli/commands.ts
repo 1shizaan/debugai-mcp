@@ -22,7 +22,7 @@ import {
   writeFileConfig,
 } from '../config.js';
 import { DeviceLinkError, freeTierText, startDeviceLink, waitForDeviceLink } from '../deviceLink.js';
-import { DEFAULT_API_BASE } from '../constants.js';
+import { DEFAULT_API_BASE, NODE_FLOOR, nodeAtLeast } from '../constants.js';
 import {
   detectedClients,
   findClient,
@@ -359,9 +359,8 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
   };
 
   heading('Runtime');
-  const major = Number(process.versions.node.split('.')[0]);
-  if (major >= 18) pass(`Node ${process.versions.node}`);
-  else fail(`Node ${process.versions.node} is too old`, 'DebugAI MCP needs Node 18 or newer (it uses global fetch).');
+  if (nodeAtLeast(process.versions.node)) pass(`Node ${process.versions.node}`);
+  else fail(`Node ${process.versions.node} is too old`, `DebugAI MCP needs Node ${NODE_FLOOR} or newer (it uses global fetch).`);
 
   heading('Account');
   const { apiKey, apiBase, keySource } = resolveSettings(DEFAULT_API_BASE, env, () => {});

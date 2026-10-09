@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@debugai/mcp"><img src="https://img.shields.io/npm/v/@debugai/mcp?color=0A0A0F&label=npm" alt="npm version"></a>
-  <img src="https://img.shields.io/badge/node-%3E%3D18-0A0A0F" alt="Node 18+">
+  <img src="https://img.shields.io/badge/node-%3E%3D18.14.1-0A0A0F" alt="Node 18.14.1+">
   <img src="https://img.shields.io/badge/license-MIT-0A0A0F" alt="MIT license">
 </p>
 
@@ -12,7 +12,7 @@ Your agent hands an error to `debug_error` and gets back the root cause, the exa
 
 Before any of that, `lookup_error` asks your project's memory whether this error has happened here before and which fix held. It makes no model call and does not count against your limit, so an agent can afford it on every failure. In Claude Code a [hook](#claude-code-hook) runs it for every failed command without the agent having to remember.
 
-Auto-configures Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Gemini CLI, and Cline. Works in any other MCP client with a manual entry. Node 18 or later.
+Auto-configures Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Gemini CLI, and Cline. Works in any other MCP client with a manual entry. Node 18.14.1 or later.
 
 **New in 2.7.0:** machine-applicable edits now name the file their code is
 actually in, the tools say to call them the moment something fails rather than
@@ -44,7 +44,7 @@ Worth knowing before you run something that edits your editor config:
 
 - Signs you in with a short code you confirm in the browser. Free account, 10 debugs a day, no card.
 - Stores your key in `~/.debugai/config.json` with `0600` permissions. That is the only file that ever holds it.
-- Adds a `debugai` entry to the config of each MCP client it detects. Every file is backed up first (`<file>.debugai-backup-<timestamp>`), every other setting in the file is preserved, and a file it cannot parse is left alone and reported instead. One caveat stated plainly: if your config contains comments, the rewrite drops them, because JSON has nowhere to put them. You get a warning before it happens and the backup still has them.
+- Adds a `debugai` entry to the config of each MCP client it detects. Every file is backed up first (`<file>.debugai-backup-<timestamp>`), every other setting in the file is preserved, and a file it cannot parse is left alone and reported instead. One caveat stated plainly: if your config contains comments, the rewrite drops them, because JSON has nowhere to put them. `install` writes first and tells you afterwards, and the backup still has them. `install --dry-run` tells you before anything is written.
 - Skips VS Code by default, because the [DebugAI extension](https://marketplace.visualstudio.com/items?itemName=debugai.debugai) already registers this server there and a second entry would show every tool twice. `install --client=vscode` does it anyway if you want the server without the extension.
 - Never writes your key into a client config. Client configs get committed to repos. Keys should not.
 
@@ -114,8 +114,8 @@ Give it an error, get an analysis.
 | `snippetStartLine` | no | With `codeSnippet`: the line of the file that the first line of the snippet is. Pass it when the snippet is a window from the middle of a file. Without it the lines are counted from 1, and an error that says `Line 44` cannot be matched to a 15-line snippet. (2.7) |
 | `filePath` | no | Path to the file that threw. An absolute path also names the repository the error belongs to. |
 | `projectRoot` | no | Absolute path of the repository, when the agent was started somewhere else. Project memory and local reads are scoped to it. (2.6) |
-| `reproCommand` | no | The command that shows the failure: a test, a script, a curl. Fix #1 is aimed at making it pass, and each fix's check becomes this command instead of a syntax check. DebugAI never runs it. (2.6) |
-| `expected` | no | What `reproCommand` should print or do once the bug is fixed. (2.6) |
+| `reproCommand` | no | The command that shows the failure: a test, a script, a curl. Fix #1 is aimed at making it pass, and each fix's check becomes this command instead of a syntax check. DebugAI never runs it. Up to 500 characters. (2.6) |
+| `expected` | no | What `reproCommand` should print or do once the bug is fixed. Up to 500 characters. (2.6) |
 
 Returns the root cause, up to 3 fixes ranked by confidence, the detected framework, and whether the answer came from cache. Each fix also carries, where derivable: `edits` (exact old/new strings your agent's edit tool can apply directly), `unified_diff`, and `verify_with`, the check to run after applying. With `reproCommand` that check is your command and the result you said to expect; without it, a syntax-level check. It never writes to your files and never runs your reproduction. Applying a fix is your agent's call, and yours.
 
@@ -134,12 +134,12 @@ The response names every file it read (`Read locally: src/api.ts, src/db.ts`, an
 Exactly what it will and will not read:
 
 - **Inside your project only.** The boundary is your git repo root, or the working directory when that is not a repo. It is checked *after* symlinks resolve, so a path in an error message cannot walk out of the project: `../../.ssh/id_rsa` and a symlink pointing outside both fail the same check.
-- **Source files only**, by extension allowlist (`.ts .tsx .js .jsx .mjs .cjs .py .go .rs .rb .java .kt .php .cs .swift .vue .svelte`). `.env`, `.pem`, key files, dumps and images are not on it, so they are never candidates.
-- **Bounded**: at most 3 files, 256 KB each, and a large file is sent as a ±40-line window around the failing line rather than whole. Windowed blocks say so.
+- **Source files only**, by extension allowlist (`.ts .tsx .js .jsx .mjs .cjs .py .pyi .go .rs .rb .java .kt .kts .scala .groovy .gradle .php .cs .swift .dart .c .cc .cpp .h .hpp .ps1 .psm1 .psd1 .vue .svelte`). `.env`, `.pem`, key files, dumps and images are not on it, so they are never candidates.
+- **Bounded**: at most 3 files, none over 2 MB, and 50,000 characters in all. A large file is sent as a ±40-line window around the failing line rather than whole. Windowed blocks say so.
 - **Vendored code is skipped**: `node_modules`, `site-packages`, `dist`, `.venv` and friends. Your code is what needs explaining.
-- **Your snippet always wins.** Pass `codeSnippet` and nothing is read from disk.
+- **Your snippet always wins.** Pass `codeSnippet` and no source file is read. Your manifests still are (see [Limits and honesty](#limits-and-honesty)).
 
-Whatever it reads is sent to DebugAI's API for analysis, same as the error text. If that is not acceptable for a given repo, pass `codeSnippet` explicitly and the local read never happens.
+Whatever it reads is sent to DebugAI's API for analysis, same as the error text. If you do not want a given source file sent, pass `codeSnippet` explicitly and no source file is read. The project manifests described under [Limits and honesty](#limits-and-honesty) are read on every `debug_error` call.
 
 ### `report_outcome`
 
@@ -150,10 +150,10 @@ Tell DebugAI what happened after it answered, including when its fix was not use
 | `debugLogId` | yes | The `debug_log_id` from the `debug_error` response. |
 | `result` | yes | `worked`, `worked_modified`, `failed`, or `unused`. |
 | `fixRank` | no | Which ranked fix was applied (1-3). Whichever rank it was is the fix remembered. |
-| `finalFix` | with `worked_modified` | The code that actually held, after your changes. It is what gets remembered, not the suggestion. (2.6) |
-| `newError` | no | With `failed`: the error seen after applying. An error message, not an explanation. |
-| `actualFix` | no | What really fixed it, when it was not DebugAI's answer. |
-| `toolFeedback` | no | What would have made the tool more useful on this call. |
+| `finalFix` | with `worked_modified` | The code that actually held, after your changes. It is what gets remembered, not the suggestion. Up to 4,000 characters. (2.6) |
+| `newError` | no | With `failed`: the error seen after applying. An error message, not an explanation. Up to 4,000 characters. |
+| `actualFix` | no | What really fixed it, when it was not DebugAI's answer. Up to 4,000 characters. |
+| `toolFeedback` | no | What would have made the tool more useful on this call. Up to 2,000 characters. |
 
 What each verdict means, because they are different facts:
 
@@ -213,8 +213,8 @@ Then `/hooks` inside Claude Code shows it loaded.
 
 - **Cost per failed command.** `npx` resolves `@latest` each time, which measured 1.5 to 1.9 seconds warm and 6.7 seconds cold on one Linux machine, before the lookup itself. For about a third of a second instead, install it once with `npm i -g @debugai/mcp@latest` and use `"command": "debugai-mcp hook"`. A global install does not update itself: rerun that command when a new version ships.
 - **The timeout.** Claude Code's default for a command hook is 600 seconds. The hook bounds itself (5 seconds to read its input, 8 for the lookup), and `20` makes sure a stuck network can never hold the agent longer than that.
-- **What leaves your machine.** The failed command's output, up to 3,000 characters (its start and end when it is longer), and the project id, which is a hash of the repository path. Credentials are redacted before the lookup reads anything, and nothing is stored. The command line itself is not sent.
-- **Which project.** The git repository the command ran in, resolved the same way `debug_error` resolves `projectRoot`, so the hook and a debug of the same failure read one memory. Outside any repository, and in your home directory, it stays silent.
+- **What leaves your machine.** The failed command's output, up to 3,000 characters (its start and end when it is longer), and the project id, which is a hash of the repository path. The output is sent as printed: this package does not redact it. The API redacts credentials when it arrives, before the lookup reads it, and nothing is stored. The command line itself is not sent.
+- **Which project.** The git repository the command ran in, resolved the same way `debug_error` resolves `projectRoot`, so the hook and a debug of the same failure read one memory. Outside a repository the folder itself becomes the project, and its output is sent. Only your home directory and the filesystem root are refused, and there the hook stays silent.
 
 ## VS Code
 
@@ -254,6 +254,7 @@ Where it goes:
 | Claude Desktop | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows `%APPDATA%\Claude\claude_desktop_config.json` |
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Zed | macOS and Linux `~/.config/zed/settings.json` (`$XDG_CONFIG_HOME` when set), Windows `%APPDATA%\Zed\settings.json`. A different key, see below |
 | Gemini CLI | `~/.gemini/settings.json` |
 | Cline | VS Code globalStorage, `saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
 
@@ -278,17 +279,18 @@ Then run `npx -y @debugai/mcp login` once to store your key. If you would rather
 |----------|---------|-------------|
 | `DEBUGAI_API_KEY` | (none) | Your API key. Overrides `api_key` in the config file. |
 | `DEBUGAI_API_BASE` | DebugAI production | Override for self-hosted or staging setups. Falls back to `api_base` in the config file. |
-| `DEBUGAI_TIMEOUT_MS` | `150000` | Per-request deadline. Deep analyses can take 30-90s. |
+| `DEBUGAI_TIMEOUT_MS` | `150000` | Deadline for `debug_error` only. Deep analyses can take 30-90s. `lookup_error` waits 8 seconds, `report_outcome` 15, and the hook ignores this variable. |
 | `DEBUGAI_CONFIG_PATH` | `~/.debugai/config.json` | Alternate config file location. Rarely needed. |
 
 ## Limits and honesty
 
-- Free tier: 10 debugs/day. Pro ($12/mo): 1,000/mo soft cap, never hard-blocked at it. `lookup_error` and the hook do not count against either.
+- Free tier: 10 debugs/day. Pro ($12/mo): 1,000 debugs a month included, then fair use; the 1,000 is a soft cap, so you are told at it and not stopped. `lookup_error` and the hook do not count against either.
 - When you hit the daily cap the tool says so and stops. It will not silently retry.
 - Simple errors route to a fast model. Ugly cross-file ones route to a stronger one on paid tiers. The `Model:` badge in each response tells you which one answered.
-- Analyses run on DebugAI's servers. The error text, any snippet you pass, and (since 2.2) the project source files the stack trace names are sent there, and Claude (Anthropic) does the analysis. The response lists every file that was read. Scope and limits are spelled out under [`debug_error`](#it-reads-the-source-the-trace-names-22). Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
-- Errors are remembered per project so a repeat hit starts from a fix that was already confirmed. The project identity is a hash of your repo root path; the path itself is never sent.
-- The VS Code extension reads the project's `requirements.txt`, `pyproject.toml` and `package.json` and the interpreter the editor has selected, which is what lets it tell "not installed" apart from "installed under a different interpreter". This server sends none of that, so on a missing-module error you get the general answer and the check to run, not a verdict. You have a shell and it does not, so the honest division is that you run the check. Reporting those facts back through this server is planned.
+- Analyses run on DebugAI's servers. The error text, any snippet you pass, (since 2.2) the project source files the stack trace names, and (since 2.5) the project facts described below are sent there, and Claude (Anthropic) does the analysis. The response lists every file that was read. Scope and limits are spelled out under [`debug_error`](#it-reads-the-source-the-trace-names-22). Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
+- Errors are remembered per project so a repeat hit starts from a fix that was already confirmed. The project identity is a hash of your repo root path. The project id carries no path, but an absolute `filePath` is sent as written, as is any path in the error text.
+- Every `debug_error` call also reads what the project declares and sends it: `package.json`, `requirements.txt`, `pyproject.toml` and any `.csproj`, `.fsproj` or `.vbproj` (found by walking down from the project root, to a bounded depth and count). What is sent is the dependency names and the versions as the manifests spell them, the names of Python modules in the project, the names of any virtual-environment folders, and whether a `node_modules` folder and a `.env` file exist. The contents of `.env` are never opened. This happens even when you pass `codeSnippet`. It lets the engine tell a package that is declared from one that is not.
+- The one fact it does not send is which Python interpreter is selected. The VS Code extension can read that from the editor, which is what lets it tell "not installed" apart from "installed under a different interpreter". This server has no equivalent, so on a missing-module error you get the general answer and the check to run, not a verdict. You have a shell and it does not, so the honest division is that you run the check.
 
 ## Troubleshooting
 
@@ -383,6 +385,38 @@ project on libraries newer than any model's training data (2026-09-20).
 - **The bundled VS Code server gets the same instructions as this one.** The two
   had drifted, and the bundled copy had lost the paragraph saying it reads the
   source files a stack trace names.
+- **Source files are read for more toolchains.** MSBuild and tsc `file(line,col)`,
+  javac and Maven `[line,col]`, .NET `in path:line N`, PowerShell `At path:N`,
+  Gradle build files, `file://` paths and JVM frames now name a file. New file
+  types: `.c .cc .cpp .h .hpp .pyi .kts .scala .dart .groovy .ps1 .psm1 .psd1 .gradle`.
+- **What is read from disk fits the API.** Three files with long lines used to go
+  out over the 50,000-character limit and come back refused, to an agent that had
+  passed no code. Each file is now cut to the characters left, in whole lines
+  around the failing one. A file up to 2 MB is read as a window; the old 256 KB
+  limit cut it mid-line.
+- **An empty `codeSnippet` or `filePath` counts as not given.** An agent that fills
+  an optional parameter with `""` was told a file had been read and sent no code.
+- **A manifest that was not read is not one that declares nothing.** A UTF-16
+  `requirements.txt`, one over 512 KB, a `package.json` with a byte-order mark or
+  that does not parse, and a walk that stopped early used to send a list that
+  called itself complete, and the engine answered "not declared". Each now marks
+  the list possibly short. A `pyproject.toml` is read table by table, so
+  `testpaths` and author names are no longer sent as dependencies.
+- **Error messages say what to do.** A monthly limit, or a `debugLogId` the API
+  does not know, is reported as not worth retrying. A short rate limit says how
+  long to wait. An outage passes on the engine's own sentence. A proxy or sign-in
+  page answering in the API's place is named as such, instead of as invalid JSON.
+  A request's deadline now covers the whole answer, not only the wait for headers.
+- **Sign-in is sturdier.** It survives a brief API outage, keeps the key it was
+  given when the config file cannot be written, opens only http(s) addresses and
+  no longer goes through `cmd` on Windows, and shows the free limit the server
+  reports instead of a fixed number.
+- **`install` leaves a config as it found it.** It keeps the file's permissions,
+  writes through a symlink instead of replacing it, and reads files that start
+  with a byte-order mark. `uninstall` also removes the VS Code entry and Claude
+  Code's per-directory entries.
+- **On Windows the home folder is refused as a project** however its path is
+  spelled.
 
 **2.6.0** - Built from one agent's field report on a week of real use (2026-09-16), finding by finding.
 

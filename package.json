@@ -2,7 +2,7 @@
   "name": "@debugai/mcp",
   "version": "2.7.0",
   "mcpName": "io.github.1shizaan/debugai-mcp",
-  "description": "DebugAI MCP server. One command sets it up in Claude Desktop, Claude Code, Cursor, Zed, Windsurf, Cline or any MCP client: browser sign-in, no key pasting, no config editing.",
+  "description": "DebugAI MCP server. One command sets it up in Claude Desktop, Claude Code, Cursor, Zed, Windsurf, Cline, Gemini CLI or any MCP client: browser sign-in, no key pasting, no config editing.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -16,7 +16,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=18.14.1"
   },
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
