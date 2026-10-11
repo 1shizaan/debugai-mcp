@@ -17,7 +17,9 @@ Auto-configures Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Gemini CLI, 
 **New in 2.7.0:** machine-applicable edits now name the file their code is
 actually in, the tools say to call them the moment something fails rather than
 waiting for you to paste an error, and a server that has fallen behind says so
-once per session instead of in the middle of every diagnosis.
+once per session instead of in the middle of every diagnosis. A server started
+in your home folder, a folder above it or the filesystem root no longer treats
+that as a project: it reads no local files until the agent names a `projectRoot`.
 See the [changelog](https://debugai.io/changelog?src=npm-readme).
 
 **If a fix does not work, tell me and I will fix it.** The fixes that did not
