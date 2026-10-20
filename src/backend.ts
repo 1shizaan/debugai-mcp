@@ -1,35 +1,26 @@
 import type { AuthProvider } from './auth.js';
 import type { LookupResult } from './lookupAnswer.js';
+import type { ApiDebugBody, ApiMemoryLookupBody } from './generated/engineContract.js';
 
-export interface DebugRequest {
-  error_message: string;
-  code_snippet?: string;
-  // 1-based line of the file that code_snippet's first line is. Absent means the
-  // engine counts from 1, which is right only for a snippet that starts the file.
-  code_snippet_start_line?: number;
-  language?: string;
-  file_path?: string;
-  project_id?: string;
-  framework_hint?: string;
-  /**
-   * What this repository declares, read off disk by the local server.
-   * Optional on purpose: an older gateway ignores an unknown field, and a newer
-   * engine treats its absence as "we do not know" rather than "there is none".
-   * See ../gatherWorkspaceFacts.ts.
-   *
-   * Typed as an opaque object rather than a named shape: this module's job is
-   * to forward JSON, and importing the fact type here would couple the
-   * transport to a contract that gains fields independently of it.
-   */
-  /**
-   * How the caller will check the fix: a command that reproduces the failure,
-   * and what it should give once fixed. Never run by DebugAI; every fix's
-   * verify_with becomes this command (field report 2026-09-16, R11).
-   */
-  repro_command?: string;
-  repro_expected?: string;
-  workspace_facts?: object;
-}
+/**
+ * The body of POST /api/debug: the engine's own DebugRequest, which the API
+ * forwards field for field, less what the API sets itself. Generated from the
+ * engine's pydantic model (generated/engineContract.ts), so a field the engine
+ * renames or starts requiring fails tsc here rather than in a user's session.
+ *
+ * - code_snippet_start_line: the 1-based line of the file the snippet starts
+ *   at. Absent means the engine counts from 1, which is right only for a
+ *   snippet that starts the file.
+ * - workspace_facts: what this repository declares, read off disk by the
+ *   local server (see ./workspaceFacts.ts). Optional on purpose: the engine
+ *   reads its absence as "we do not know" rather than "there is none". An
+ *   opaque object here: this module forwards JSON, and the fact shape gains
+ *   fields independently of the transport.
+ * - repro_command, repro_expected: how the caller will check the fix. Never
+ *   run by DebugAI; every fix's verify_with becomes this command (field report
+ *   2026-09-16, R11).
+ */
+export type DebugRequest = ApiDebugBody;
 
 // v2 contract (schema_version 2.0): exact search/replace payload derived
 // mechanically by the engine from the submitted snippet — see
@@ -259,10 +250,8 @@ export async function callOutcomeBackend(
   return postJson<OutcomeResponse>('/user/debug-feedback', req, config, OUTCOME_TIMEOUT_MS);
 }
 
-export interface LookupRequest {
-  error_message: string;
-  project_id?: string;
-}
+/** The body of POST /api/memory/lookup, which the API forwards to the engine's. */
+export type LookupRequest = ApiMemoryLookupBody;
 
 export interface LookupResponse extends LookupResult {
   error_signature?: string;
