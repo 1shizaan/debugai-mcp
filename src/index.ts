@@ -36,8 +36,14 @@ Quick start (one command, no config files to edit):
   npx -y @debugai/mcp setup
 
 Commands:
-  setup          sign in, then wire up every MCP client found on this machine
-  login          sign in via browser and store the key (--key dbg_… to paste one)
+  setup          sign in, then wire up every MCP client found on this machine,
+                 then offer the DebugAI rule for this project's agents and the
+                 Claude Code hook (asks; without a terminal, prints the command)
+                   --rules / --no-rules  add the rule, or skip it, without asking
+                   --hook / --no-hook    add the hook, or skip it, without asking
+                   --dry-run             print what would change, write nothing
+                   (other flags go to install)
+  login         sign in via browser and store the key (--key dbg_… to paste one)
   logout         remove the stored key
   status         show the active key and account
   install        add DebugAI to MCP client configs
@@ -47,10 +53,11 @@ Commands:
                    --dry-run       print what would change, write nothing
                    --remove        take the entry back out
   uninstall      remove DebugAI from every client config
-  doctor         diagnose setup: key, API reachability, client wiring
+  doctor         diagnose setup: key, API reachability, client wiring, the
+                 rule and the hook
   hook           Claude Code PostToolUseFailure hook: looks each failed shell
                  command up in project memory and tells the agent what it knows
-                 (see the README, "Claude Code hook")
+                 ("setup --hook" adds it; see the README, "Claude Code hook")
   (no command)   run the MCP server on stdio — this is what clients launch
 
 Tools exposed to your agent:

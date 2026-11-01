@@ -34,7 +34,7 @@ builds this.
 npx -y @debugai/mcp setup
 ```
 
-That is the whole thing. It signs you in through your browser (no key to find or copy), writes the config for every MCP client it finds on this machine, then checks that all of it actually works.
+That is the whole thing. It signs you in through your browser (no key to find or copy), writes the config for every MCP client it finds on this machine, offers to add the [rule](#making-your-agent-reach-for-it) and the [Claude Code hook](#claude-code-hook) that make your agent call DebugAI when a command fails, then checks that all of it actually works. Run it inside your project, where the rule goes.
 
 Restart the clients it names and your agent has the tools.
 
@@ -49,6 +49,7 @@ Worth knowing before you run something that edits your editor config:
 - Adds a `debugai` entry to the config of each MCP client it detects. Every file is backed up first (`<file>.debugai-backup-<timestamp>`), every other setting in the file is preserved, and a file it cannot parse is left alone and reported instead. One caveat stated plainly: if your config contains comments, the rewrite drops them, because JSON has nowhere to put them. `install` writes first and tells you afterwards, and the backup still has them. `install --dry-run` tells you before anything is written.
 - Skips VS Code by default, because the [DebugAI extension](https://marketplace.visualstudio.com/items?itemName=debugai.debugai) already registers this server there and a second entry would show every tool twice. `install --client=vscode` does it anyway if you want the server without the extension.
 - Never writes your key into a client config. Client configs get committed to repos. Keys should not.
+- Asks before adding the rule to the end of the instruction file each of your agents reads in this project (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, or the first file on Zed's list), and before adding the hook to `~/.claude/settings.json`, backed up first. Enter alone is yes. With no terminal to ask in it adds neither and prints the command that would; `--rules`, `--no-rules`, `--hook` and `--no-hook` answer without asking. It never adds either twice.
 
 Preview it without writing anything:
 
@@ -67,7 +68,7 @@ npx -y @debugai/mcp logout      # removes the stored key
 
 | Command | What it does |
 |---------|--------------|
-| `setup` | `login` then `install`, then verifies. The one you want. |
+| `setup` | `login` then `install`, then offers the rule and the Claude Code hook, then verifies. The one you want. `--rules`, `--no-rules`, `--hook`, `--no-hook`, `--dry-run`. |
 | `login` | Browser sign-in. `--key dbg_…` to paste a key instead (CI, air-gapped boxes). `--force` to re-link. |
 | `logout` | Removes the stored key. |
 | `status` | Which key and account are active right now. |
@@ -176,7 +177,7 @@ Example, in Claude Code:
 
 ### Making your agent reach for it
 
-The server tells connecting agents what it is for, but a rule in your project file is the deterministic version. Add this to `CLAUDE.md`, `.cursorrules`, or whatever your agent reads:
+The server tells connecting agents what it is for, but a rule in your project file is the deterministic version. `setup`, run inside your project, offers to add it to the end of the file each of your agents reads there: `CLAUDE.md` for Claude Code (or `AGENTS.md`, when that is what it reads), `AGENTS.md` for Cursor, Windsurf and Cline, `GEMINI.md` for Gemini CLI, and for Zed the first file on its list, since Zed reads only that one. It will not start a file that would make an agent stop reading the one it reads now. `setup --rules` adds it without asking. By hand, it is:
 
 ```
 When a command fails, call the debugai lookup_error tool first: it is
@@ -194,7 +195,7 @@ A rule still depends on the agent deciding a failure is worth a call, and agents
 
 It speaks only when memory has something to act on: a stored fix (confirmed, unproven or anti-pattern) or advice this project reported as failed. A miss, a timeout, no network, no key, an interrupted command or a command that printed nothing all produce no output, and every path exits 0, so it never blocks a tool call. It uses the key `login` stored and never starts a sign-in, because a hook cannot answer one.
 
-Add this to `~/.claude/settings.json` (every project) or `.claude/settings.json` in one repository:
+`setup` offers to add it to `~/.claude/settings.json`, for every project: merged in beside your other settings and hooks, the file backed up first, nothing added on a second run, and a file that does not parse left alone with this block printed to paste. `setup --hook` adds it without asking. For one repository only, put the same block in its `.claude/settings.json` yourself:
 
 ```json
 {
@@ -350,6 +351,12 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
   reaches a model.
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
+
+**Unreleased**
+
+- **`setup` offers the rule and the Claude Code hook.** The docs told you to paste a rule into `CLAUDE.md` and a hook into `~/.claude/settings.json`, and said no command did either, so an agent that could call DebugAI was still left to decide when. After the clients are configured, `setup` now asks to add both: the rule to the end of the file each of your agents reads in the current project, and the hook into `~/.claude/settings.json`, merged in and backed up first. Enter alone is yes. `--rules`, `--no-rules`, `--hook` and `--no-hook` answer without asking, and with no terminal and no flag it adds neither and prints the command that would. A second run adds nothing, a settings file that does not parse is left alone, and your home folder is never a project.
+- **The file is the one each agent reads, checked against its docs.** A new `CLAUDE.md` stops Claude Code reading an `AGENTS.md`, and Zed reads only the first file on its list, so `setup` will not start a file that hides the one an agent reads now. It names that file for you instead.
+- **`doctor` reports the rule and the hook**, including a hook kept in a project's own `.claude/settings.json`.
 
 **2.7.0** - Built from a second agent's field report, this time from a greenfield
 project on libraries newer than any model's training data (report of 2026-09-20).

@@ -1,7 +1,9 @@
 // The subcommands. Every one of these exists to delete a step a human used
 // to do by hand:
 //
-//   setup      login + install, the only command the README leads with
+//   setup      login + install, the only command the README leads with, then
+//              the rule and the Claude Code hook — replaces "paste this into
+//              CLAUDE.md" and "paste this into ~/.claude/settings.json"
 //   login      device link — replaces "copy your key out of the dashboard"
 //   install    writes client configs — replaces "paste this JSON blob"
 //   doctor     one command that answers "why isn't it working"
@@ -30,8 +32,10 @@ import {
   knownClients,
   type McpClient,
 } from './clients.js';
+import { DEBUGAI_RULE, applyRule, planRule, readsRules, ruleRoot, type RulePlan } from './agentRule.js';
+import { applyHook, claudeSettingsPath, hookSites, type HookResult } from './claudeHook.js';
 import { applyToClient, findInstall, installedSpec, isInstalled, plaintextKeySites, type InstallResult } from './install.js';
-import { FAIL, INFO, OK, WARN, bold, codeBox, dim, heading, openBrowser, say, yellow } from './ui.js';
+import { FAIL, INFO, OK, WARN, askYes, bold, canAsk, codeBox, dim, heading, openBrowser, say, yellow } from './ui.js';
 
 // ── shared helpers ───────────────────────────────────────────────────────────
 
@@ -346,7 +350,7 @@ export function cmdUninstall(argv: string[], env: NodeJS.ProcessEnv = process.en
 
 // ── doctor ───────────────────────────────────────────────────────────────────
 
-export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
+export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): Promise<number> {
   let hardFailures = 0;
   const fail = (msg: string, hint?: string): void => {
     hardFailures++;
@@ -446,6 +450,41 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
     }
   }
 
+  // Warnings, never problems: without them DebugAI works, the agent just
+  // decides for itself when to call it.
+  const withDebugai = detected.filter((c) => isInstalled(c));
+  const claudeCode = withDebugai.some((c) => c.id === 'claude-code');
+  if (withDebugai.some(readsRules) || claudeCode) {
+    heading('Rule and hook');
+    const where = ruleRoot(cwd);
+    if ('refused' in where) {
+      say(`  ${INFO()} Rule — not checked: ${where.refused}.`);
+    } else {
+      const plan = planRule(where.root, withDebugai);
+      for (const p of plan.present) pass(`Rule — in ${p.file}`, `read by ${p.clients.join(', ')}`);
+      const without = plan.add.flatMap((a) => a.clients);
+      if (without.length) {
+        say(`  ${WARN()} ${yellow(`Rule — ${without.join(', ')} read${without.length === 1 ? 's' : ''} no DebugAI rule in ${where.root}`)}`);
+        say(`      ${dim(`fix: ${RULE_CMD}`)}`);
+      }
+      // setup will not start these, so it is not the fix.
+      for (const w of plan.withheld) {
+        say(`  ${WARN()} ${yellow(`Rule — ${w.clients.join(', ')} read${w.clients.length === 1 ? 's' : ''} ${w.file}, which this project does not have`)}`);
+        say(`      ${dim(`setup leaves it to you: ${w.client} would read it in place of ${w.hides}. Add the rule to ${w.file} if ${w.client} is not used here.`)}`);
+      }
+    }
+    if (claudeCode) {
+      const sites = hookSites('root' in where ? where.root : null);
+      if (sites.found.length) {
+        pass(`Claude Code hook — in ${sites.found[0]}`);
+      } else {
+        for (const p of sites.unreadable) say(`  ${WARN()} ${yellow(`Could not parse ${p}, so its hooks were not checked`)}`);
+        say(`  ${WARN()} ${yellow(`Claude Code hook — not in ${claudeSettingsPath()}`)}`);
+        say(`      ${dim(`fix: ${HOOK_CMD}`)}`);
+      }
+    }
+  }
+
   say();
   if (hardFailures) {
     say(`${FAIL()} ${hardFailures} problem${hardFailures === 1 ? '' : 's'} to fix.`);
@@ -457,7 +496,123 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
 
 // ── setup (the headline command) ─────────────────────────────────────────────
 
-export async function cmdSetup(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
+const RULE_CMD = 'npx -y @debugai/mcp setup --rules';
+const HOOK_CMD = 'npx -y @debugai/mcp setup --hook';
+
+/** Who answers setup's questions. A seam, so a test can be the person at the terminal. */
+export interface Asker {
+  canAsk: () => boolean;
+  ask: (question: string) => Promise<boolean>;
+}
+
+const TERMINAL: Asker = { canAsk, ask: (question) => askYes(question) };
+
+/**
+ * `--rules` / `--no-rules` and `--hook` / `--no-hook` answer without asking.
+ * With neither, and nobody at a terminal to ask (CI, a script, an agent running
+ * setup on someone's behalf), the answer is no and the command that would do it
+ * is printed: a file written into a project nobody agreed to costs more than one
+ * line to copy.
+ */
+async function decide(argv: string[], name: string, question: string, asker: Asker): Promise<boolean | undefined> {
+  if (flag(argv, `no-${name}`)) return false;
+  if (flag(argv, name)) return true;
+  return asker.canAsk() ? asker.ask(question) : undefined;
+}
+
+/** The clients the rule and the hook are for: the ones `install` just acted on. */
+function habitClients(argv: string[], env: NodeJS.ProcessEnv): McpClient[] {
+  const named = flagValue(argv, 'client');
+  if (named) return named.split(',').map((id) => findClient(id.trim(), env)).filter((c): c is McpClient => !!c);
+  return detectedClients(env).filter((c) => !c.optIn || isInstalled(c));
+}
+
+async function offerRule(argv: string[], clients: McpClient[], cwd: string, dryRun: boolean, asker: Asker): Promise<void> {
+  if (flag(argv, 'no-rules') || !clients.some(readsRules)) return;
+  heading('The DebugAI rule');
+  const where = ruleRoot(cwd);
+  if ('refused' in where) {
+    say(`  ${INFO()} Not added: ${where.refused}.`);
+    say(`      ${dim(`To add it, run this inside your project: ${RULE_CMD}`)}`);
+    return;
+  }
+  const plan = planRule(where.root, clients);
+  for (const p of plan.present) say(`  ${OK()} ${p.file} — already has it (${p.clients.join(', ')})`);
+  if (plan.add.length) await addRule(argv, plan, dryRun, asker);
+  for (const w of plan.withheld) {
+    say(`  ${WARN()} ${yellow(`${w.file} not started: ${w.client} reads ${w.hides} and would read ${w.file} in its place.`)}`);
+    say(`      ${dim(`${w.clients.join(', ')} read${w.clients.length === 1 ? 's' : ''} ${w.file}. If this project does not use ${w.client}, add the rule there by hand.`)}`);
+  }
+}
+
+async function addRule(argv: string[], plan: RulePlan, dryRun: boolean, asker: Asker): Promise<void> {
+  say(dim('  Your agent can call DebugAI now. With this rule in the file it reads at the start'));
+  say(dim('  of every session, it calls DebugAI when a command fails. The rule goes at the end'));
+  say(dim('  of each file, and nothing else in it changes:'));
+  const width = Math.max(...plan.add.map((a) => a.file.length + (a.exists ? 0 : 11)));
+  for (const a of plan.add) say(`    ${`${a.file}${a.exists ? '' : ' (new file)'}`.padEnd(width)}  ${dim(`for ${a.clients.join(', ')}`)}`);
+  say(dim(`  in ${plan.root}`));
+  if (dryRun) {
+    say();
+    DEBUGAI_RULE.split('\n').forEach((l) => say(`    ${l}`));
+    say(dim('  Dry run — not written.'));
+    return;
+  }
+
+  const yes = await decide(argv, 'rules', 'Add the rule?', asker);
+  if (yes === undefined) say(`  ${INFO()} Not added: no terminal to ask in. To add it, run this here: ${bold(RULE_CMD)}`);
+  if (!yes) return;
+  for (const r of applyRule(plan)) {
+    say(r.action === 'failed'
+      ? `  ${FAIL()} ${r.file} — ${r.error}`
+      : `  ${OK()} ${r.file} — ${r.action === 'created' ? 'created, with the rule' : 'rule added at the end'}`);
+  }
+}
+
+function describeHook(r: HookResult): void {
+  if (r.action === 'failed') {
+    say(`  ${FAIL()} ${r.path} — ${r.error}`);
+    say(`      ${dim('merge this in by hand:')}`);
+    r.snippet.split('\n').forEach((l) => say(`      ${dim(l)}`));
+    return;
+  }
+  say(`  ${OK()} Claude Code hook — ${r.action === 'unchanged' ? 'already in' : 'added to'} ${dim(r.path)}`);
+  if (r.backupPath) say(`      ${dim(`backup: ${r.backupPath}`)}`);
+  if (r.warning) say(`      ${WARN()} ${yellow(r.warning)}`);
+  if (r.action !== 'unchanged') say(`      ${dim('next: run /hooks in Claude Code to see it loaded')}`);
+}
+
+async function offerHook(argv: string[], clients: McpClient[], dryRun: boolean, asker: Asker): Promise<void> {
+  if (flag(argv, 'no-hook') || !clients.some((c) => c.id === 'claude-code')) return;
+  heading('The Claude Code hook');
+  const path = claudeSettingsPath();
+  const check = applyHook(path, { dryRun: true });
+  if (check.action === 'unchanged' || check.action === 'failed') { describeHook(check); return; }
+
+  say(dim('  After every Bash or PowerShell command that fails, the hook looks the output up in'));
+  say(dim("  this project's DebugAI memory and tells Claude what it finds, before Claude reacts."));
+  say(dim('  No model call, and it does not count against your limit.'));
+  say(dim(`  It goes into ${path}, backed up first, every other setting kept.`));
+  if (check.warning) say(`  ${WARN()} ${yellow(check.warning)}`);
+  if (dryRun) {
+    say();
+    check.snippet.split('\n').forEach((l) => say(`    ${l}`));
+    say(dim('  Dry run — not written.'));
+    return;
+  }
+
+  const yes = await decide(argv, 'hook', 'Add the hook?', asker);
+  if (yes === undefined) say(`  ${INFO()} Not added: no terminal to ask in. To add it: ${bold(HOOK_CMD)}`);
+  if (!yes) return;
+  describeHook(applyHook(path));
+}
+
+export async function cmdSetup(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  asker: Asker = TERMINAL,
+  cwd: string = process.cwd(),
+): Promise<number> {
   const { apiKey } = resolveSettings(DEFAULT_API_BASE, env, () => {});
   if (!apiKey || flag(argv, 'force')) {
     const code = await cmdLogin(argv, env);
@@ -469,5 +624,10 @@ export async function cmdSetup(argv: string[], env: NodeJS.ProcessEnv = process.
   const installCode = cmdInstall(argv.filter((a) => a !== '--force'), env);
   if (installCode !== 0) return installCode;
 
-  return cmdDoctor([], env);
+  const dryRun = flag(argv, 'dry-run') || flag(argv, 'print');
+  const clients = habitClients(argv, env);
+  await offerRule(argv, clients, cwd, dryRun, asker);
+  await offerHook(argv, clients, dryRun, asker);
+
+  return cmdDoctor([], env, cwd);
 }

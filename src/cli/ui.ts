@@ -5,6 +5,7 @@
 // run at the same time: a subcommand exits before any transport is created.
 import { spawn } from 'node:child_process';
 import { platform } from 'node:os';
+import { createInterface } from 'node:readline';
 
 const useColor =
   process.stdout.isTTY === true &&
@@ -87,6 +88,34 @@ export function openBrowser(url: string): boolean {
     }
   };
   return launch(0);
+}
+
+/** Whether there is a person at a terminal to answer a question. */
+export function canAsk(): boolean {
+  return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
+/**
+ * A yes-or-no question, where Enter alone is yes. Closing the input (Ctrl-D)
+ * is a no. Ctrl-C ends the command, as it does everywhere else in it: readline
+ * would otherwise swallow it and leave the question on screen.
+ */
+export function askYes(
+  question: string,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input, output });
+    let answered = false;
+    rl.on('SIGINT', () => { output.write('\n'); process.exit(130); });
+    rl.on('close', () => { if (!answered) { output.write('\n'); resolve(false); } });
+    rl.question(`${question} ${dim('[Y/n]')} `, (answer) => {
+      answered = true;
+      rl.close();
+      resolve(/^(y|yes)?$/i.test(answer.trim()));
+    });
+  });
 }
 
 /** Big enough to read across a room, small enough to fit a narrow terminal. */
