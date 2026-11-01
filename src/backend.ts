@@ -72,6 +72,8 @@ export interface DebugResponse {
   pattern_matched?: string;
   remaining_today?: number;
   mock?: boolean;
+  /** The engine could not read its own model's reply: the fix in this answer is a placeholder, not an analysis. */
+  analysis_unavailable?: boolean;
   schema_version?: string;
   // Attached by the API gateway — the handle report_outcome links back to.
   debug_log_id?: string | null;

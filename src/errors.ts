@@ -228,3 +228,28 @@ export function mapBackendErrorToToolResult(err: unknown): CallToolResult {
     },
   };
 }
+
+/**
+ * What an agent is told when the engine could not read its own model's reply
+ * (`analysis_unavailable`). The API answers 200 with a placeholder fix, "Nothing
+ * was analysed", and a debug_log_id, and formatted as an analysis it led agents
+ * to report an outcome on it: two were filed as fixes that worked after edits
+ * (2026-10-30 review). It is the engine-unavailable failure above, said once.
+ * Byte-identical in the npm and the bundled server (drift.test.ts reads both).
+ */
+export function analysisUnavailableResult(): CallToolResult {
+  return {
+    isError: true,
+    content: [{
+      type: 'text',
+      text:
+        'DebugAI could not read its own analysis of this error, so nothing was analysed. ' +
+        "That is a fault on DebugAI's side, and this attempt was not counted against the user's debugs. " +
+        'Calling debug_error again with the same input is worth one try, because the failure is not deterministic.',
+    }],
+    structuredContent: {
+      error_type: 'analysis_unavailable',
+      retryable: true,
+    },
+  };
+}

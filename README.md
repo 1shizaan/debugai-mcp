@@ -351,6 +351,16 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
 
+**Unreleased**
+
+- **An answer DebugAI could not read is a failure, not a fix.** When the engine could not
+  read its own model's reply, `debug_error` returned a fix called "Nothing was analysed -
+  please run it again" at 0% confidence, with a `debugLogId` to report an outcome on. Two
+  of five such answers were reported as a fix that worked after changes, because the agent
+  then solved the error another way. It now comes back as an error: DebugAI could not read
+  its own analysis, the attempt was not counted, one more try is worth it, and there is no
+  `debugLogId`.
+
 **2.7.0** - Built from a second agent's field report, this time from a greenfield
 project on libraries newer than any model's training data (report of 2026-09-20).
 
