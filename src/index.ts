@@ -43,7 +43,7 @@ Commands:
                    --hook / --no-hook    add the hook, or skip it, without asking
                    --dry-run             print what would change, write nothing
                    (other flags go to install)
-  login         sign in via browser and store the key (--key dbg_… to paste one)
+  login          sign in via browser and store the key (--key dbg_… to paste one)
   logout         remove the stored key
   status         show the active key and account
   install        add DebugAI to MCP client configs
