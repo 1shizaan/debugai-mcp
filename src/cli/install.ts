@@ -31,7 +31,7 @@ export interface InstallResult {
   removedProjects?: string[];
 }
 
-function backupPath(path: string): string {
+export function backupPath(path: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return `${path}.debugai-backup-${stamp}`;
 }
@@ -53,7 +53,7 @@ function backupPath(path: string): string {
  * So the write goes to where the path really points, and the temporary file
  * takes the old file's mode before it is renamed over it.
  */
-function writeAtomic(path: string, contents: string): void {
+export function writeAtomic(path: string, contents: string): void {
   let target = path;
   let mode: number | undefined;
   try {
