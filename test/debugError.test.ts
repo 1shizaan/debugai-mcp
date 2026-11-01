@@ -83,6 +83,31 @@ describe('debug_error tool over MCP', () => {
     });
   });
 
+  // A 200 with a placeholder fix and a debug_log_id. Formatted as an analysis,
+  // two of these were reported as fixes that worked after edits (2026-10-30).
+  it('an answer the engine could not read is a failure, with nothing to report an outcome on', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      analysis_unavailable: true,
+      root_cause: "We could not read our own analysis engine's answer for this error.",
+      fixes: [{ rank: 1, title: 'Nothing was analysed - please run it again', description: 'No diagnosis was produced.', confidence: 0, code: '', line_hint: '' }],
+      debug_log_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      model_used: 'claude-haiku-5-5',
+    }), { status: 200, headers: { 'content-type': 'application/json' } })));
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'debug_error',
+      arguments: { errorText: 'KeyError: user' },
+    }) as CallToolResult;
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({ error_type: 'analysis_unavailable', retryable: true });
+    expect(textOf(result)).toContain('not counted');
+    expect(textOf(result)).not.toContain('## Fixes');
+    expect(JSON.stringify(result)).not.toContain('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+    expect(JSON.stringify(result)).not.toContain('After applying a fix');
+  });
+
   it('sends language only when not "auto" and never sends framework_hint', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ root_cause: 'x', fixes: [] }), { status: 200 },

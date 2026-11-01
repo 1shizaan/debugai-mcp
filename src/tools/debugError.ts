@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { BackendConfig, DebugFix } from '../backend.js';
 import { callDebugBackend } from '../backend.js';
-import { mapBackendErrorToToolResult } from '../errors.js';
+import { analysisUnavailableResult, mapBackendErrorToToolResult } from '../errors.js';
 import { resolveAuth } from './authGate.js';
 import { basename } from 'node:path';
 import { getProjectId, getProjectRoot, NO_ROOT_BADGE } from '../project.js';
@@ -267,6 +267,10 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           },
           gate.config,
         );
+
+        // The engine could not read its own model's reply: a placeholder fix and
+        // a debug_log_id, which is no analysis to report an outcome on.
+        if (result.analysis_unavailable) { return analysisUnavailableResult(); }
 
         const sections: string[] = [];
         // Above the diagnosis, not glued to the end of it. A server this old

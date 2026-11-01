@@ -359,6 +359,13 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
 - **The file is the one each agent reads, checked against its docs.** A new `CLAUDE.md` stops Claude Code reading an `AGENTS.md`, and Zed reads only the first file on its list, so `setup` will not start a file that hides the one an agent reads now. It names that file for you instead.
 - **`doctor` reports the rule and the hook**, including a hook kept in a project's own `.claude/settings.json`.
 - **`try`** makes the project from the docs' "Your first debug" in a new folder: three files with a planted bug whose traceback never names the file that is wrong. `--lang js` for the JavaScript one. It used to be three files copied off the page by hand. It never writes into a folder that exists, and it prints how to run the program and what to ask your agent or the VS Code extension. The files are the page's, byte for byte, and a test reads the page and fails if the two drift.
+- **An answer DebugAI could not read is a failure, not a fix.** When the engine could not
+  read its own model's reply, `debug_error` returned a fix called "Nothing was analysed -
+  please run it again" at 0% confidence, with a `debugLogId` to report an outcome on. Two
+  of five such answers were reported as a fix that worked after changes, because the agent
+  then solved the error another way. It now comes back as an error: DebugAI could not read
+  its own analysis, the attempt was not counted, one more try is worth it, and there is no
+  `debugLogId`.
 
 **2.7.0** - Built from a second agent's field report, this time from a greenfield
 project on libraries newer than any model's training data (report of 2026-09-20).
