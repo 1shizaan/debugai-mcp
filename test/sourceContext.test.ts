@@ -668,3 +668,69 @@ describe('a window is taken from the whole file, by lines', () => {
     expect(res?.files[0].start).toBe(rows - 5 - 40);
   });
 });
+
+// ── A file named with no line ────────────────────────────────────────────────
+//
+// An agent names the file it suspects with an error that carries no line for
+// it. The window was lines 1-81 of the file whatever the error said: the 10-30
+// read of the user report found about 18 answers saying so, for failures at
+// line 433, 528 and past 1,000. Each case below puts the line that matters far
+// below line 81, where the old window could not reach.
+
+describe('a file named with no line in the error', () => {
+  const pad = (n: number, tag: string) =>
+    Array.from({ length: n }, (_, i) => `# ${tag} filler ${i + 1}`).join('\n');
+
+  it('centres on the test a pytest node id names', () => {
+    write('tests/test_orders.py',
+      `${pad(430, 'a')}\nclass TestTotals:\n    def test_rounds_to_cents(self):\n        assert total() == 10.01\n${pad(200, 'b')}`);
+    const res = resolveSourceContext({
+      errorText: 'FAILED tests/test_orders.py::TestTotals::test_rounds_to_cents - AssertionError: assert 10.0 == 10.01',
+      filePath: 'tests/test_orders.py',
+      root,
+    });
+    expect(res?.files[0].text).toContain('def test_rounds_to_cents');
+    // Centred, and the label claims no line nobody reported.
+    expect(res?.files[0].start).toBe(432 - 40);
+    expect(res?.files[0].line).toBeNull();
+  });
+
+  it("takes the one line the error states, and not the line of another file's frame", () => {
+    write('app/totals.py', `${pad(432, 'c')}\n    return round(sub * rate, 2)\n${pad(200, 'd')}`);
+    const res = resolveSourceContext({
+      errorText:
+        'Traceback (most recent call last):\n  File "app/main.py", line 7, in run\n' +
+        'AssertionError: totals differ at line 433',
+      filePath: 'app/totals.py',
+      root,
+    });
+    expect(res?.files[0].text).toContain('return round(sub * rate, 2)');
+  });
+
+  it('centres on the definition of a name the error quotes', () => {
+    // Used near the top, defined far below: the definition is what to centre on.
+    write('src/cart.ts',
+      `${pad(5, 'e')}\nconst first = new Cart();\n${pad(495, 'e')}\nexport class Cart {\n  total = 0;\n}\n${pad(100, 'f')}`);
+    const res = resolveSourceContext({
+      errorText: "TypeError: 'Cart' has no member 'applyCoupon'",
+      filePath: 'src/cart.ts',
+      root,
+    });
+    expect(res?.files[0].text).toContain('export class Cart {');
+  });
+
+  it('keeps the centre when the lines are too wide for the budget', () => {
+    const wide = (tag: string, n: number) =>
+      Array.from({ length: n }, (_, i) => `# ${tag} ${i} ${'x'.repeat(3000)}`).join('\n');
+    // About 16 of these lines fit the budget, so only a cut centred on the
+    // test keeps it; a cut from the window's top stops 24 lines short.
+    write('tests/test_wide.py',
+      `${wide('g', 430)}\ndef test_the_one_that_failed():\n    assert False\n${wide('h', 50)}`);
+    const res = resolveSourceContext({
+      errorText: 'FAILED tests/test_wide.py::test_the_one_that_failed',
+      filePath: 'tests/test_wide.py',
+      root,
+    });
+    expect(res?.files[0].text).toContain('def test_the_one_that_failed');
+  });
+});

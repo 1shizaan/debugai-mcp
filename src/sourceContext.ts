@@ -104,6 +104,12 @@ export interface ResolvedFile {
    * (2026-09-07). Optional only so a caller building one by hand still compiles.
    */
   start?: number;
+  /**
+   * The line the window was centred on when the trace named this file but no
+   * line: one `anchorLine` chose from what the error says. Never written as
+   * the failing line, because nothing reported it as one.
+   */
+  anchor?: number;
 }
 
 // ── Frame extraction ─────────────────────────────────────────────────────────
@@ -372,7 +378,65 @@ function windowAround(
   return { text: lines.slice(start, end).join('\n'), windowed: true, start: start + 1 };
 }
 
-function readOne(frame: Frame, root: string, cwd: string): ResolvedFile | null {
+/**
+ * A line to centre on when the trace names a file but not a line in it.
+ *
+ * windowAround sends lines 1-81 when it has no line, and that was the common
+ * case, not the edge: an agent names the file it suspects (`filePath`) beside
+ * an error that carries no `file:line` for it, such as a pytest node id, an
+ * assertion message or an exception about a name. The 10-30 read of the user
+ * report found about 18 answers that said, in their own words, that only lines
+ * 1-81 were visible, for failures at line 433, 528 and past line 1,000. Two of
+ * them fell back to "Insufficient context" at 20%, and one claimed corruption
+ * below line 81 and advised `git checkout --` on a file that had none.
+ *
+ * In order, the first that lands on a line of this file:
+ *   - the test a pytest node id names (`file.py::Class::test_x`), at its def;
+ *   - a `line N` the error states, when it states exactly one outside the
+ *     frames of other files (those already have their own line);
+ *   - a name the error quotes ('name', "name", `name`): where it is defined,
+ *     then where it first appears.
+ * null when none does, and the head of the file goes, as it always did.
+ */
+export function anchorLine(source: string, errorText: string): number | null {
+  if (!errorText) return null;
+  const lines = source.split('\n');
+  const find = (re: RegExp): number | null => {
+    for (let i = 0; i < lines.length; i++) if (re.test(lines[i])) return i + 1;
+    return null;
+  };
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  for (const m of errorText.matchAll(/\.py::(?:[A-Za-z_]\w*::)*([A-Za-z_]\w*)/g)) {
+    const at = find(new RegExp(`^\\s*(?:async\\s+)?def\\s+${esc(m[1])}\\b`));
+    if (at !== null) return at;
+  }
+
+  // `File "x.py", line 12` and `in C:\x.cs:line 42` belong to their own frames.
+  const prose = errorText.replace(PY_FRAME, '').replace(DOTNET_IN, '');
+  const stated = new Set([...prose.matchAll(/\bline\s+(\d+)\b/gi)].map((m) => Number(m[1])));
+  if (stated.size === 1) {
+    const [n] = [...stated];
+    if (n >= 1 && n <= lines.length) return n;
+  }
+
+  const names = [...errorText.matchAll(/['"`‘“]([A-Za-z_][\w.]{2,63})['"`’”]/g)]
+    .map((m) => m[1].split('.').pop() as string)
+    .filter((n) => n.length >= 3);
+  for (const n of names) {
+    const at = find(new RegExp(
+      `^\\s*(?:export\\s+)?(?:async\\s+)?(?:def|function|class|const|let|var|func|fn|interface|type)\\s+${esc(n)}\\b`,
+    ));
+    if (at !== null) return at;
+  }
+  for (const n of names) {
+    const at = find(new RegExp(`\\b${esc(n)}\\b`));
+    if (at !== null) return at;
+  }
+  return null;
+}
+
+function readOne(frame: Frame, root: string, cwd: string, errorText: string): ResolvedFile | null {
   for (const candidate of candidatesFor(frame, root, cwd)) {
     if (!isReadableSource(candidate)) continue;
     if (!isInsideRoot(candidate, root)) continue;
@@ -380,7 +444,9 @@ function readOne(frame: Frame, root: string, cwd: string): ResolvedFile | null {
       const st = statSync(candidate);
       if (!st.isFile()) continue;
       if (st.size > MAX_BYTES) continue;
-      const win = windowAround(readFileSync(candidate, 'utf8'), frame.line);
+      const source = readFileSync(candidate, 'utf8');
+      const anchor = frame.line === null ? anchorLine(source, errorText) : null;
+      const win = windowAround(source, frame.line ?? anchor);
       const real = realpathSync(candidate);
       const rel = relative(realpathSync(root), real);
       return {
@@ -389,6 +455,7 @@ function readOne(frame: Frame, root: string, cwd: string): ResolvedFile | null {
         text: win.text,
         windowed: win.windowed,
         start: win.start,
+        ...(anchor !== null ? { anchor } : {}),
       };
     } catch {
       continue; // unreadable, binary, permissions — try the next candidate
@@ -417,7 +484,7 @@ function fitToBudget(file: ResolvedFile, budget: number): ResolvedFile | null {
   if (room <= 0) return null;
   if (file.text.length <= room) return file;
   const first = (file.start ?? 1) - 1;
-  const at = file.line !== null ? file.line - 1 : first;
+  const at = file.line !== null ? file.line - 1 : file.anchor !== undefined ? file.anchor - 1 : first;
   const fit = fitCodeWindow(file.text.split('\n'), first, at, '\n', room);
   if (!fit.text) return null;
   return { ...file, text: fit.text, start: fit.startLine, windowed: true };
@@ -459,7 +526,7 @@ export function resolveSourceContext(opts: {
     let budget = API_CODE_MAX_CHARS;
     for (const frame of frames) {
       if (files.length >= maxFiles) break;
-      const got = readOne(frame, opts.root, cwd);
+      const got = readOne(frame, opts.root, cwd, opts.errorText);
       if (got && !takenLabels.has(got.label)) {
         takenLabels.add(got.label);
         const fitted = fitToBudget(got, budget);
