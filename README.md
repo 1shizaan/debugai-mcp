@@ -76,6 +76,7 @@ npx -y @debugai/mcp logout      # removes the stored key
 | `uninstall` | Removes the entry from every client config. |
 | `doctor` | Diagnoses a broken setup: key, API reachability, per-client wiring, a config entry with no version, a key sitting in plain text in a client config. |
 | `hook` | The Claude Code hook. Reads a failed command from stdin and prints what project memory knows. See [Claude Code hook](#claude-code-hook). |
+| `try` | Makes the planted-bug project from [Your first debug](https://docs.debugai.io/first-debug) in a new folder, `debugai-first-bug` unless you name one, and says what to do with it. `--lang python` (the default) or `--lang js`. Never writes into a folder that exists. |
 
 `npx -y @debugai/mcp install --list` prints every supported client, where its config lives on your OS, and whether DebugAI is already in it.
 
@@ -357,6 +358,7 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
 - **`setup` offers the rule and the Claude Code hook.** The docs told you to paste a rule into `CLAUDE.md` and a hook into `~/.claude/settings.json`, and said no command did either, so an agent that could call DebugAI was still left to decide when. After the clients are configured, `setup` now asks to add both: the rule to the end of the file each of your agents reads in the current project, and the hook into `~/.claude/settings.json`, merged in and backed up first. Enter alone is yes. `--rules`, `--no-rules`, `--hook` and `--no-hook` answer without asking, and with no terminal and no flag it adds neither and prints the command that would. A second run adds nothing, a settings file that does not parse is left alone, and your home folder is never a project.
 - **The file is the one each agent reads, checked against its docs.** A new `CLAUDE.md` stops Claude Code reading an `AGENTS.md`, and Zed reads only the first file on its list, so `setup` will not start a file that hides the one an agent reads now. It names that file for you instead.
 - **`doctor` reports the rule and the hook**, including a hook kept in a project's own `.claude/settings.json`.
+- **`try`** makes the project from the docs' "Your first debug" in a new folder: three files with a planted bug whose traceback never names the file that is wrong. `--lang js` for the JavaScript one. It used to be three files copied off the page by hand. It never writes into a folder that exists, and it prints how to run the program and what to ask your agent or the VS Code extension. The files are the page's, byte for byte, and a test reads the page and fails if the two drift.
 
 **2.7.0** - Built from a second agent's field report, this time from a greenfield
 project on libraries newer than any model's training data (report of 2026-09-20).

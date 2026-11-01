@@ -16,6 +16,7 @@ import {
   cmdLogout,
   cmdSetup,
   cmdStatus,
+  cmdTry,
   cmdUninstall,
 } from './cli/commands.js';
 
@@ -58,6 +59,11 @@ Commands:
   hook           Claude Code PostToolUseFailure hook: looks each failed shell
                  command up in project memory and tells the agent what it knows
                  ("setup --hook" adds it; see the README, "Claude Code hook")
+  try            make the planted-bug project from "Your first debug" in a new
+                 folder (default ./debugai-first-bug, or name one) and say what
+                 to do next. Never writes into a folder that exists
+                   --lang python   settings.py, cart.py, main.py (the default)
+                   --lang js       data.js, users.js, main.js
   (no command)   run the MCP server on stdio — this is what clients launch
 
 Tools exposed to your agent:
@@ -83,7 +89,7 @@ Docs: https://debugai.io/start?src=mcp
 `;
 
 const SUBCOMMANDS = new Set([
-  'setup', 'login', 'logout', 'status', 'install', 'uninstall', 'doctor', 'hook',
+  'setup', 'login', 'logout', 'status', 'install', 'uninstall', 'doctor', 'hook', 'try',
 ]);
 
 async function runSubcommand(name: string, argv: string[]): Promise<number> {
@@ -96,6 +102,7 @@ async function runSubcommand(name: string, argv: string[]): Promise<number> {
     case 'uninstall': return cmdUninstall(argv);
     case 'doctor':    return cmdDoctor(argv);
     case 'hook':      return cmdHook(VERSION);
+    case 'try':       return cmdTry(argv);
     default:          return 1;
   }
 }
