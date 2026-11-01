@@ -10,11 +10,14 @@
 //   status     what account/key is active right now
 //   logout     removes the stored key
 //   uninstall  removes the server entry from client configs
+//   try        makes the planted-bug project from the docs — replaces "copy
+//              these three files off the page"
 //
 // Each returns a process exit code. Nothing here ever writes to stdout while
 // the MCP transport is live — subcommands exit before a server is created.
-import { statSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { hostname, platform } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import {
   clearStoredKey,
   configPath,
@@ -34,6 +37,7 @@ import {
 } from './clients.js';
 import { DEBUGAI_RULE, applyRule, planRule, readsRules, ruleRoot, type RulePlan } from './agentRule.js';
 import { applyHook, claudeSettingsPath, hookSites, type HookResult } from './claudeHook.js';
+import { FIRST_BUG_RUN, firstBugFiles } from './firstBug.js';
 import { applyToClient, findInstall, installedSpec, isInstalled, plaintextKeySites, type InstallResult } from './install.js';
 import { FAIL, INFO, OK, WARN, askYes, bold, canAsk, codeBox, dim, heading, openBrowser, say, yellow } from './ui.js';
 
@@ -630,4 +634,63 @@ export async function cmdSetup(
   await offerHook(argv, clients, dryRun, asker);
 
   return cmdDoctor([], env, cwd);
+}
+
+// ── try ──────────────────────────────────────────────────────────────────────
+
+const FIRST_DEBUG_URL = 'https://docs.debugai.io/first-debug';
+
+/**
+ * Makes the planted-bug project from "Your first debug" in a new folder, and
+ * says what to do with it. Copying three files off a docs page by hand was the
+ * slowest step between setting DebugAI up and watching it trace a bug.
+ *
+ * Never writes into a folder that exists, empty or not. The folder is made
+ * without `recursive`, so "already there" is mkdir failing, not a check that
+ * can be out of date by the time the files are written.
+ */
+export function cmdTry(argv: string[], cwd: string = process.cwd()): number {
+  const lang = flagValue(argv, 'lang') ?? 'python';
+  if (lang !== 'python' && lang !== 'js') {
+    say(`${FAIL()} --lang takes ${bold('python')} or ${bold('js')}, not "${lang}".`);
+    return 1;
+  }
+  const folder = argv.find((a, i) => !a.startsWith('-') && argv[i - 1] !== '--lang') ?? 'debugai-first-bug';
+  const path = resolve(cwd, folder);
+  const files = firstBugFiles(lang);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(path);
+  } catch (err) {
+    say((err as NodeJS.ErrnoException).code === 'EEXIST'
+      ? `${FAIL()} ${folder} already exists, so nothing was written. Name a new folder: ${bold('npx -y @debugai/mcp try my-first-bug')}`
+      : `${FAIL()} Could not make ${folder}: ${(err as Error).message}`);
+    return 1;
+  }
+  try {
+    for (const f of files) writeFileSync(join(path, f.name), f.text, { flag: 'wx' });
+  } catch (err) {
+    say(`${FAIL()} Could not write into ${folder}: ${(err as Error).message}`);
+    return 1;
+  }
+
+  const run = FIRST_BUG_RUN[lang];
+  say(`${OK()} Made ${bold(folder)}: ${files.map((f) => f.name).join(', ')}`);
+  say(dim('  A small shop with a planted bug. The line that crashes is not the line that is'));
+  say(dim('  wrong, and the error never names the file that is.'));
+  heading('1. Run it and see the error');
+  say(`  cd ${folder}`);
+  say(`  ${run}${lang === 'python' ? dim('   (python3 on some systems)') : ''}`);
+  heading('2. Ask DebugAI');
+  say(`  ${bold('With an agent')} (Claude Code, Cursor, or any client DebugAI is set up in), start it`);
+  say('  in that folder and ask:');
+  say(`    Run ${run}. If it fails, use DebugAI to find the root cause before you change anything.`);
+  say();
+  say(`  ${bold('In VS Code')} with the DebugAI extension: open the folder (File, Open Folder) and run`);
+  say(`  ${bold('DebugAI: Index Entire Workspace')}. Run ${run} in the editor's terminal, right-click`);
+  say(`  inside the terminal and pick ${bold('DebugAI: Analyze Terminal Error')}, then ${bold('Analyze This')}.`);
+  say();
+  say(dim('  DebugAI not set up yet? npx -y @debugai/mcp setup'));
+  say(dim(`  What the answer should name, and why: ${FIRST_DEBUG_URL}`));
+  return 0;
 }
