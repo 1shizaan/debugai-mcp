@@ -15,7 +15,7 @@
 //
 // Each returns a process exit code. Nothing here ever writes to stdout while
 // the MCP transport is live — subcommands exit before a server is created.
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { hostname, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
@@ -35,7 +35,8 @@ import {
   knownClients,
   type McpClient,
 } from './clients.js';
-import { DEBUGAI_RULE, applyRule, planRule, readsRules, ruleRoot, type RulePlan } from './agentRule.js';
+import { DEBUGAI_RULE, applyRule, planRule, readsRules, ruleRoot, type RuleClient, type RulePlan } from '../agentRule.js';
+import { parseJsonc } from './jsonc.js';
 import { applyHook, claudeSettingsPath, hookSites, type HookResult } from './claudeHook.js';
 import { FIRST_BUG_RUN, firstBugFiles } from './firstBug.js';
 import { applyToClient, findInstall, installedSpec, isInstalled, plaintextKeySites, type InstallResult } from './install.js';
@@ -464,7 +465,7 @@ export async function cmdDoctor(_argv: string[], env: NodeJS.ProcessEnv = proces
     if ('refused' in where) {
       say(`  ${INFO()} Rule — not checked: ${where.refused}.`);
     } else {
-      const plan = planRule(where.root, withDebugai);
+      const plan = planRule(where.root, ruleClients(withDebugai));
       for (const p of plan.present) pass(`Rule — in ${p.file}`, `read by ${p.clients.join(', ')}`);
       const without = plan.add.flatMap((a) => a.clients);
       if (without.length) {
@@ -531,7 +532,28 @@ function habitClients(argv: string[], env: NodeJS.ProcessEnv): McpClient[] {
   return detectedClients(env).filter((c) => !c.optIn || isInstalled(c));
 }
 
-async function offerRule(argv: string[], clients: McpClient[], cwd: string, dryRun: boolean, asker: Asker): Promise<void> {
+/**
+ * The clients as agentRule.ts sees them. Gemini CLI reads GEMINI.md unless its
+ * settings name other files (context.fileName), and the rule module is shared
+ * with the extension and reads no client's config, so the names are read here.
+ * Plain names only: they are joined to the project root.
+ */
+function ruleClients(clients: McpClient[]): RuleClient[] {
+  return clients.map((c) => {
+    if (c.id !== 'gemini-cli') return c;
+    let names: string[] = [];
+    try {
+      const value = (parseJsonc(readFileSync(c.configPath ?? '', 'utf8')).value as { context?: { fileName?: unknown } } | null)
+        ?.context?.fileName;
+      names = (Array.isArray(value) ? value : [value])
+        .filter((n): n is string => typeof n === 'string' && n.trim() !== '' && !/[\\/]/.test(n) && n !== '..');
+    } catch { /* no settings file, or one that does not parse: Gemini's default */ }
+    if (!names.length) names = ['GEMINI.md'];
+    return { ...c, files: { reads: names, create: names[0] } };
+  });
+}
+
+async function offerRule(argv: string[], clients: RuleClient[], cwd: string, dryRun: boolean, asker: Asker): Promise<void> {
   if (flag(argv, 'no-rules') || !clients.some(readsRules)) return;
   heading('The DebugAI rule');
   const where = ruleRoot(cwd);
@@ -630,7 +652,7 @@ export async function cmdSetup(
 
   const dryRun = flag(argv, 'dry-run') || flag(argv, 'print');
   const clients = habitClients(argv, env);
-  await offerRule(argv, clients, cwd, dryRun, asker);
+  await offerRule(argv, ruleClients(clients), cwd, dryRun, asker);
   await offerHook(argv, clients, dryRun, asker);
 
   return cmdDoctor([], env, cwd);

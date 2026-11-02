@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEBUGAI_RULE, applyRule, hasRule, planRule } from '../src/cli/agentRule.js';
+import { DEBUGAI_RULE, applyRule, hasRule, planRule, ruleAppended } from '../src/agentRule.js';
 import { HOOK_GROUP, applyHook } from '../src/cli/claudeHook.js';
 import type { McpClient } from '../src/cli/clients.js';
 import { cmdSetup } from '../src/cli/commands.js';
@@ -100,6 +100,15 @@ describe('the rule', () => {
     expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf8')).toBe(once);
   });
 
+  it('a rule wrapped another way is still the rule, so a second run adds nothing', () => {
+    for (const wrapped of [DEBUGAI_RULE.replace(/\n/g, ' '), DEBUGAI_RULE.replace(/\n/g, '\n\n')]) {
+      writeFileSync(join(dir, 'CLAUDE.md'), `# Shop\n\n${wrapped}\n`);
+      const plan = planRule(dir, [CLAUDE_CODE]);
+      expect(plan.add).toEqual([]);
+      expect(plan.present).toEqual([{ file: 'CLAUDE.md', clients: ['Claude Code'] }]);
+    }
+  });
+
   it('goes after the last byte of the file, in the file\'s own line endings', () => {
     const before = '# Shop\r\n\r\nUse pnpm.';
     writeFileSync(join(dir, 'CLAUDE.md'), before);
@@ -107,6 +116,19 @@ describe('the rule', () => {
     const after = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
     expect(after.slice(0, before.length)).toBe(before);
     expect(after.slice(before.length)).toBe(`\r\n\r\n${DEBUGAI_RULE.replace(/\n/g, '\r\n')}\r\n`);
+  });
+
+  it('setup appends the same bytes the editor writes through its document model', () => {
+    // The editor cannot append to a buffer, so it writes ruleAppended(text) whole;
+    // setup appends the tail. One of them changing alone would leave two files
+    // the same rule with different spacing, or line endings, depending on who added it.
+    for (const before of ['', '# Shop\n', '# Shop', '# Shop\r\n', '# Shop\r\n\r\nUse pnpm.', '\n']) {
+      const path = join(dir, 'CLAUDE.md');
+      writeFileSync(path, before);
+      applyRule(planRule(dir, [CLAUDE_CODE]));
+      expect(readFileSync(path, 'utf8')).toBe(ruleAppended(before));
+      rmSync(path);
+    }
   });
 
   it('Claude Code reading an AGENTS.md gets the rule there, and no CLAUDE.md that would hide it', () => {
@@ -209,10 +231,37 @@ describe('setup, run without a terminal', () => {
     expect(readFileSync(settings(), 'utf8')).toContain('@debugai/mcp@latest hook');
   });
 
+  it('Gemini CLI gets the rule in the file its settings name, and the first name when none exists', () => {
+    mkdirSync(join(home, '.gemini'));
+    writeFileSync(join(home, '.gemini', 'settings.json'), JSON.stringify({ context: { fileName: ['TEAM.md', 'GEMINI.md'] } }));
+    setup(project, '--rules', '--no-hook');
+    expect(hasRule(readFileSync(join(project, 'TEAM.md'), 'utf8'))).toBe(true);
+    expect(existsSync(join(project, 'GEMINI.md'))).toBe(false);
+    expect(hasRule(readFileSync(join(project, 'CLAUDE.md'), 'utf8'))).toBe(true);
+  });
+
+  it('Gemini CLI reads GEMINI.md by default, and a settings name that leaves the project is ignored', () => {
+    mkdirSync(join(home, '.gemini'));
+    writeFileSync(join(home, '.gemini', 'settings.json'), JSON.stringify({ context: { fileName: ['../outside.md', 'sub/dir.md'] } }));
+    setup(project, '--rules', '--no-hook');
+    expect(hasRule(readFileSync(join(project, 'GEMINI.md'), 'utf8'))).toBe(true);
+    expect(existsSync(join(home, 'code', 'outside.md'))).toBe(false);
+    expect(existsSync(join(project, 'sub'))).toBe(false);
+  });
+
   it('--dry-run writes neither', () => {
     setup(project, '--dry-run', '--rules', '--hook');
     expect(existsSync(join(project, 'CLAUDE.md'))).toBe(false);
     expect(existsSync(settings())).toBe(false);
+  });
+
+  it('adds nothing outside a git repository, and says so', () => {
+    const plain = join(home, 'code', 'notes');
+    mkdirSync(plain, { recursive: true });
+    const out = setup(plain, '--rules', '--no-hook');
+    expect(existsSync(join(plain, 'CLAUDE.md'))).toBe(false);
+    expect(existsSync(join(plain, 'AGENTS.md'))).toBe(false);
+    expect(out).toContain('is not in a git repository');
   });
 
   it('refuses the home folder as a project', () => {
