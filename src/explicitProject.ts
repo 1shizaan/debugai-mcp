@@ -50,7 +50,8 @@ function isDirectory(p: string): boolean {
   }
 }
 
-function toplevel(dir: string): string | null {
+/** The git repository's top folder, or null outside one (or with no git). agentRule.ts reads it too. */
+export function toplevel(dir: string): string | null {
   try {
     const out = execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd: dir,
