@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { outcomeAck, type OutcomeResult } from '../src/outcomeAck.js';
 
-const ALL: OutcomeResult[] = ['worked', 'worked_modified', 'failed', 'unused'];
+const ALL: OutcomeResult[] = ['worked', 'worked_modified', 'failed', 'unused', 'diagnosis_wrong'];
 
 describe('outcomeAck', () => {
   it('names the verdict it was given, and no other', () => {
@@ -44,6 +44,26 @@ describe('outcomeAck', () => {
   it('thanks an unused report for the real fix only when one came with it', () => {
     expect(outcomeAck({ result: 'unused', actualFix: 'pinned numpy' })).toContain('actually worked was logged');
     expect(outcomeAck({ result: 'unused' })).toContain('send it in actualFix');
+  });
+
+  it('tells a wrong-diagnosis report it counts against the answer, and what it leaves alone', () => {
+    const text = outcomeAck({ result: 'diagnosis_wrong', actualFix: 'the interpreter was the global one' });
+    expect(text).toContain('the diagnosis was wrong');
+    expect(text).toContain('counts against this answer');
+    expect(text).toContain('memory is left as it was');
+    expect(text).toContain('real cause you sent was logged');
+  });
+
+  it('asks a wrong-diagnosis report for the real cause only when none came with it', () => {
+    expect(outcomeAck({ result: 'diagnosis_wrong' })).toContain('send it in actualFix');
+    expect(outcomeAck({ result: 'diagnosis_wrong', actualFix: 'x' })).not.toContain('send it in actualFix');
+  });
+
+  it('says out loud that a rank and a follow-up error were ignored on a verdict that names no fix', () => {
+    expect(outcomeAck({ result: 'diagnosis_wrong', fixRank: 1 })).toContain('fixRank and newError were ignored');
+    expect(outcomeAck({ result: 'diagnosis_wrong', newError: 'x' })).toContain('fixRank and newError were ignored');
+    expect(outcomeAck({ result: 'diagnosis_wrong' })).not.toContain('were ignored');
+    expect(outcomeAck({ result: 'failed', fixRank: 1, newError: 'x' })).not.toContain('were ignored');
   });
 
   it('says out loud that finalFix was ignored on any other verdict', () => {

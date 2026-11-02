@@ -23,7 +23,7 @@
  * (apps/extension/src/mcp/drift.test.ts).
  */
 
-export type OutcomeResult = 'worked' | 'worked_modified' | 'failed' | 'unused';
+export type OutcomeResult = 'worked' | 'worked_modified' | 'failed' | 'unused' | 'diagnosis_wrong';
 
 export interface OutcomeReport {
   result: OutcomeResult;
@@ -60,6 +60,15 @@ export function outcomeAck(r: OutcomeReport): string {
           : ' If you know what actually resolved it, send it in actualFix: a wrong answer ' +
             'we can see is worth more than a right one we cannot.');
       break;
+    case 'diagnosis_wrong':
+      text =
+        'Outcome recorded: the diagnosis was wrong.' +
+        (r.actualFix
+          ? ' The real cause you sent was logged with it.'
+          : ' If you know the real cause, send it in actualFix: it is what shows us what we missed.') +
+        ' It counts against this answer. No fix of ours is marked as tried and memory is left ' +
+        'as it was, because nothing of ours was run.';
+      break;
     case 'failed':
       text =
         'Outcome recorded: fix failed.' +
@@ -75,6 +84,10 @@ export function outcomeAck(r: OutcomeReport): string {
       const unreachable: never = r.result;
       text = `Outcome recorded: ${String(unreachable)}.`;
     }
+  }
+  // Same for a verdict that names no fix: the API drops the rank and the follow-up error.
+  if (r.result === 'diagnosis_wrong' && (r.fixRank || r.newError)) {
+    text += ' fixRank and newError were ignored: this verdict names no fix.';
   }
   // Loud rather than silent: the API drops finalFix on every other verdict,
   // because nothing claims that code worked.

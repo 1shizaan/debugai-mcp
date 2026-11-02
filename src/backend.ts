@@ -114,7 +114,7 @@ export interface OutcomeRequest {
    * them and solved it another way previously had to report 'failed', which
    * marks a fix as tried and beaten when nothing of ours was ever run.
    */
-  result: 'worked' | 'worked_modified' | 'failed' | 'unused';
+  result: 'worked' | 'worked_modified' | 'failed' | 'unused' | 'diagnosis_wrong';
   fix_rank?: number;
   /** An error message observed after a failed fix. Not an explanation. */
   new_error?: string;

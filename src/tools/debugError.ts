@@ -331,7 +331,8 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           sections.push(
             `\nAfter applying a fix, call report_outcome with debugLogId "${result.debug_log_id}", ` +
             'the fixRank you applied, and result "worked", "worked_modified" (with the code that finally ' +
-            'worked in finalFix), "failed" (with newError), or "unused" if you solved it another way.',
+            'worked in finalFix), "failed" (with newError), "diagnosis_wrong" (with the real cause in ' +
+            'actualFix) if the root cause above is not the cause, or "unused" if you solved it another way.',
           );
         }
 

@@ -127,6 +127,32 @@ describe('report_outcome tool over MCP', () => {
     expect(body.source).toBe('agent');
   });
 
+  // 125 of 235 answers from the bundled server were reported 'unused' with a
+  // note, and by a reader's count about 39 said the root cause was wrong.
+  it("posts 'diagnosis_wrong' with the real cause, and says it counted against the answer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ success: true }), { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { client } = await connectedClient();
+    const result = await client.callTool({
+      name: 'report_outcome',
+      arguments: { debugLogId: 'log-123', result: 'diagnosis_wrong', actualFix: 'the interpreter was the global one' },
+    }) as CallToolResult;
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain('the diagnosis was wrong');
+    expect(result.structuredContent).toMatchObject({ recorded: true, result: 'diagnosis_wrong' });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).toEqual({
+      debug_log_id: 'log-123',
+      result: 'diagnosis_wrong',
+      actual_fix: 'the interpreter was the global one',
+      source: 'agent',
+    });
+  });
+
   it('maps auth failures to an isError tool result, not a protocol error', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ error: 'Unauthorized' }), { status: 401 },

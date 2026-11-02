@@ -152,11 +152,11 @@ Tell DebugAI what happened after it answered, including when its fix was not use
 | Input | Required | Description |
 |-------|----------|-------------|
 | `debugLogId` | yes | The `debug_log_id` from the `debug_error` response. |
-| `result` | yes | `worked`, `worked_modified`, `failed`, or `unused`. |
+| `result` | yes | `worked`, `worked_modified`, `failed`, `unused`, or `diagnosis_wrong`. |
 | `fixRank` | no | Which ranked fix was applied (1-3). Whichever rank it was is the fix remembered. |
 | `finalFix` | with `worked_modified` | The code that actually held, after your changes. It is what gets remembered, not the suggestion. Up to 4,000 characters. (2.6) |
 | `newError` | no | With `failed`: the error seen after applying. An error message, not an explanation. Up to 4,000 characters. |
-| `actualFix` | no | What really fixed it, when it was not DebugAI's answer. Up to 4,000 characters. |
+| `actualFix` | no | What really fixed it, when it was not DebugAI's answer. With `diagnosis_wrong`, the real cause. Up to 4,000 characters. |
 | `toolFeedback` | no | What would have made the tool more useful on this call. Up to 2,000 characters. |
 
 What each verdict means, because they are different facts:
@@ -164,7 +164,8 @@ What each verdict means, because they are different facts:
 - `worked`: a fix was applied and the error stopped. That fix becomes this project's confirmed fix.
 - `worked_modified`: a fix held only after you changed it. `finalFix` is required, and it replaces the suggestion in memory, so the next person is handed what worked. (2.6)
 - `failed`: a fix was applied and did not help. Later analyses and lookups in this project are shown it as advice not to repeat. A stored fix is demoted only when the error is seen coming back after it, never on a report alone.
-- `unused`: nothing of ours was run. Also the right answer for a repeat call about an error you already reported under an earlier `debugLogId`, so one fix is not counted twice.
+- `unused`: nothing of ours was run, and the diagnosis was right or you cannot say. Also the right answer for a repeat call about an error you already reported under an earlier `debugLogId`, so one fix is not counted twice.
+- `diagnosis_wrong`: you read the answer and its root cause is not the cause. Put the real cause in `actualFix`. It counts as a wrong answer, marks no fix as tried (so it is not `failed`) and changes nothing in memory.
 
 It goes through the same pipeline as feedback from the VS Code extension. Agents are asked to call it once per `debug_error` answer.
 
@@ -352,6 +353,14 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
   reaches a model.
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
+
+**Unreleased**
+
+- **A wrong root cause has its own verdict.** `report_outcome` takes `diagnosis_wrong`: you read
+  the answer and its root cause is not the cause, with the real one in `actualFix`. Until now that
+  was reported as `unused`, which says nothing about whether the answer was right, so none of it
+  could be counted. It counts as a wrong answer, marks no fix as tried and changes nothing in
+  memory.
 
 **2.8.0** - Agents use DebugAI on their own: `setup` offers the rule and the Claude Code
 hook, and `try` builds a first bug to debug. A file named with no line is read around

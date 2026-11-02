@@ -31,6 +31,7 @@ describe('serverInstructions', () => {
       'it resolves the',            // reads the files a stack trace names
       'as reproCommand, with expected',
       'report "worked_modified" and send the',
+      'pass result "diagnosis_wrong" and put the real',   // a wrong root cause is its own verdict
     ]) {
       expect(npm, `npm instructions lost: ${claim}`).toContain(claim);
       expect(bundled, `bundled instructions lost: ${claim}`).toContain(claim);

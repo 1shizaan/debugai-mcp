@@ -69,14 +69,16 @@ yourself only when you already know the relevant code is somewhere the trace
 does not name.
 
 After you apply or abandon a fix, call report_outcome with the debug_log_id.
-Report it even when you ignored the answer and fixed it your own way: pass
-result "unused" and put what actually worked in actualFix. A case DebugAI got
-wrong is worth more to it than one it got right, and "unused" is not the same
-as "failed" - reporting a fix as failed when you never ran it buries it for the
-next person. A correct diagnosis wearing a patch that did not fit is "unused"
-too: nothing of ours was run, and filing it as "failed" blames the diagnosis for
-the patch. If the tool could have served you better here, say so in
-toolFeedback; that reaches the people who build it.
+Report it even when you ignored the answer and fixed it your own way. If its
+root cause was not the cause, pass result "diagnosis_wrong" and put the real
+cause in actualFix: a case DebugAI got wrong is worth more to it than one it got
+right. If the diagnosis was right, or you cannot tell, pass "unused" and put
+what actually worked in actualFix. "unused" is not the same as "failed" -
+reporting a fix as failed when you never ran it buries it for the next person. A
+correct diagnosis wearing a patch that did not fit is "unused" too: nothing of
+ours was run, and filing it as "failed" blames the diagnosis for the patch. If
+the tool could have served you better here, say so in toolFeedback; that reaches
+the people who build it.
 If a fix worked only after you changed it, report "worked_modified" and send the
 code that held in finalFix: that code, not the suggestion, is what the next
 person who hits the error is handed.

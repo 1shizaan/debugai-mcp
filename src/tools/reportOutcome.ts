@@ -49,6 +49,19 @@ import { outcomeAck } from '../outcomeAck.js';
  *                    worked (field report 2026-09-16, T1). finalFix is what is
  *                    remembered now, and the API refuses the verdict without
  *                    it rather than fall back to promoting ours.
+ *
+ * ## And on 2026-11-02, a fifth
+ *
+ *   'diagnosis_wrong' — you read the answer and its root cause is not the
+ *                    cause. 125 of 235 answers from the bundled server were
+ *                    reported 'unused', each with a note, and by a reader's count
+ *                    about 39 of those said the diagnosis was wrong; 'unused'
+ *                    carries no verdict, so nothing could count them. It is neither 'unused' (not
+ *                    tried, for reasons that have nothing to do with being
+ *                    right) nor 'failed' (tried, and the error stayed). The real
+ *                    cause goes in actualFix. The API stores it as a wrong
+ *                    answer with no fix of ours behind it, and promotes and
+ *                    demotes nothing.
  */
 export function registerReportOutcome(server: McpServer, config: BackendConfig): void {
   server.registerTool(
@@ -58,8 +71,10 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
       description:
         'Report what happened after DebugAI answered, including when you did not use its fix. ' +
         'Call this ONCE per debug_error response, passing the debug_log_id from it. ' +
-        'If you solved the problem another way, say so with result "unused" and put the real ' +
-        'fix in actualFix: a case DebugAI got wrong is worth more to it than one it got right. ' +
+        'If you solved the problem another way, say so: "diagnosis_wrong" when you read the answer ' +
+        'and its root cause is not the cause (put the real cause in actualFix: a case DebugAI got ' +
+        'wrong is worth more to it than one it got right), "unused" when the diagnosis was right ' +
+        'or you cannot tell. ' +
         'A right diagnosis whose fix did not apply is "unused" as well, never "failed" - ' +
         'nothing of ours ran, and those two need opposite repairs. ' +
         'If the tool could have helped you more here, say that in toolFeedback. ' +
@@ -72,13 +87,17 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
           .min(1)
           .describe('The debug_log_id value from the debug_error response you are reporting on.'),
         result: z
-          .enum(['worked', 'worked_modified', 'failed', 'unused'])
+          .enum(['worked', 'worked_modified', 'failed', 'unused', 'diagnosis_wrong'])
           .describe(
             '"worked" = you applied a DebugAI fix and the error stopped. ' +
             '"worked_modified" = one of its fixes worked only after you changed it; finalFix is ' +
             'then required, and the code in it is what gets remembered. ' +
             '"failed" = you applied one and it did not help (or made things worse). ' +
-            '"unused" = you did not apply any of them and resolved it another way. ' +
+            '"unused" = you did not apply any of them and resolved it another way, and the ' +
+            'diagnosis was right or you cannot say. ' +
+            '"diagnosis_wrong" = you read the answer and its root cause is not the real cause; ' +
+            'say the real one in actualFix. Nothing of ours was run, so it is not "failed", and ' +
+            'the diagnosis was wrong, so it is not "unused". ' +
             'Use "unused" rather than "failed" when nothing of ours was actually run. ' +
             'They are different facts and reporting the wrong one buries a fix nobody tried. ' +
             '"unused" is also the answer for a repeat call: if you asked about an error again ' +
@@ -91,7 +110,7 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
           .min(1)
           .max(3)
           .optional()
-          .describe('Which ranked fix you applied (1-3). The fix you name is the one remembered for this project. Omit for "unused".'),
+          .describe('Which ranked fix you applied (1-3). The fix you name is the one remembered for this project. Omit for "unused" and "diagnosis_wrong".'),
         newError: z
           .string()
           .max(4000)
@@ -103,7 +122,8 @@ export function registerReportOutcome(server: McpServer, config: BackendConfig):
           .optional()
           .describe(
             'What actually resolved the error, when it was not the fix DebugAI suggested. ' +
-            'Free text. Say what the real cause turned out to be and what you changed, ' +
+            'Free text. Say what the real cause turned out to be (with "diagnosis_wrong" that is ' +
+            'the point of the report) and what you changed, ' +
             'especially if the cause was in a different layer than the answer addressed ' +
             '(the shell, the runtime version, the environment, a missing package).',
           ),
