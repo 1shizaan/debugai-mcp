@@ -118,6 +118,7 @@ Give it an error, get an analysis.
 | `snippetStartLine` | no | With `codeSnippet`: the line of the file that the first line of the snippet is. Pass it when the snippet is a window from the middle of a file. Without it the lines are counted from 1, and an error that says `Line 44` cannot be matched to a 15-line snippet. (2.7) |
 | `filePath` | no | Path to the file that threw. An absolute path also names the repository the error belongs to. |
 | `projectRoot` | no | Absolute path of the repository, when the agent was started somewhere else. Project memory and local reads are scoped to it. (2.6) |
+| `cwd` | no | The folder the failing command ran in, when it was not the project root: absolute, or relative to the project root, and inside it. A relative path in the error is looked for there first, and the dependencies are read from the nearest manifest folder at or above it. Outside the project it is ignored, and the footer says so. |
 | `reproCommand` | no | The command that shows the failure: a test, a script, a curl. Fix #1 is aimed at making it pass, and each fix's check becomes this command instead of a syntax check. DebugAI never runs it. Up to 500 characters. (2.6) |
 | `expected` | no | What `reproCommand` should print or do once the bug is fixed. Up to 500 characters. (2.6) |
 
@@ -352,6 +353,10 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
   reaches a model.
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
+
+**Unreleased**
+
+- **`debug_error` takes the folder the command ran in.** About twenty answers in one audit went wrong because the failing command ran in a different folder than `projectRoot`: a local module answered with `pip install`, a venv that existed in the subfolder reported missing, a build run from the parent folder, the same wrong root folder twice. An agent can now pass `cwd`, absolute or relative to the project root. A relative path in the error is looked for there first, the dependencies are read from the nearest `package.json`, `requirements.txt`, `pyproject.toml` or .NET project file between that folder and the project root, and the engine is told where the command ran. It has to be a folder inside the project, after symlinks resolve; anything else is ignored and the footer says `cwd ignored` and why. Nothing else it reads changes, and a `.env` is still never opened. The bundled server in the VS Code extension takes it too.
 
 **2.8.0** - Agents use DebugAI on their own: `setup` offers the rule and the Claude Code
 hook, and `try` builds a first bug to debug. A file named with no line is read around

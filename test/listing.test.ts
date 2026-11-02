@@ -109,7 +109,7 @@ describe('the file types and limits the README states are the ones the reader us
 describe('the privacy sentences describe what the code does', () => {
   it('manifests are read on every debug_error call, even with a snippet', () => {
     const dbg = read('src/tools/debugError.ts');
-    expect(dbg).toMatch(/const workspaceFacts = gatherWorkspaceFacts\(root\);/);
+    expect(dbg).toMatch(/const workspaceFacts = gatherWorkspaceFacts\(root, ranIn\);/);
     expect(flat).toContain('Pass `codeSnippet` and no source file is read. Your manifests still are');
     expect(flat).not.toMatch(/nothing is read from disk/i);
     expect(flat).not.toMatch(/the local read never happens/i);

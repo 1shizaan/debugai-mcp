@@ -345,13 +345,19 @@ export function isReadableSource(p: string): boolean {
  * Candidate absolute paths for one frame, best first.
  *
  * A trace may carry an absolute path (already correct), a path relative to the
- * root, or a path relative to a subdirectory the process ran from. All three
- * are tried; the first that exists and passes the root check wins.
+ * folder the command ran in, or one relative to the root. All are tried; the
+ * first that exists and passes the root check wins.
+ *
+ * The folder the command ran in comes first. A relative path in a trace is
+ * relative to where the process was, so with `cwd` named, `utils.py` from
+ * `backend/` is `backend/utils.py` and not the `utils.py` that happens to sit
+ * at the root, and `../src/main.cpp` from `build/` is a file in the project.
+ * With no `cwd` named it is the root, and this is the order it always was.
  */
 function candidatesFor(frame: Frame, root: string, cwd: string): string[] {
   const p = frame.path.replace(/^file:\/\//, '');
   if (isAbsolute(p)) return [p];
-  const out = [join(root, p), join(cwd, p)];
+  const out = [join(cwd, p), join(root, p)];
   // `src/app/x.ts` printed from inside `src/` — strip one leading segment.
   const stripped = p.split('/').slice(1).join('/');
   if (stripped) out.push(join(root, stripped));
