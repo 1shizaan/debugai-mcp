@@ -47,6 +47,24 @@ export type CwdVerdict =
 const ignored = (why: string): CwdVerdict => ({ kind: 'ignored', note: `cwd ignored: ${why}` });
 
 /**
+ * Whether the engine believes `rel` as a folder exactly as written: what
+ * `_relative_folder` in workspace_evidence.py accepts and does not change. It
+ * strips whitespace from the ends and refuses a backslash, a drive, a control
+ * character, more than 200 characters and an empty, `.` or `..` segment. Naming
+ * a folder it would trim or drop would leave the footer saying one folder while
+ * the engine is told the facts are the root's, so such a folder is not named.
+ * Stricter than the engine where the two languages differ (`trim`, and C1
+ * control characters, which include the NEL Python's strip removes and
+ * JavaScript's trim keeps), never looser.
+ */
+export function sendableFolder(rel: string): boolean {
+  if (!rel || rel.length > 200 || rel !== rel.trim()) return false;
+  if (rel.startsWith('/') || rel.includes('\\') || /^[A-Za-z]:/.test(rel)) return false;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(rel)) return false;
+  return rel.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
+}
+
+/**
  * Absolute, or relative to `root`. Realpath-contained in `root` after symlinks,
  * so a link inside the project that points out of it names nothing. A root too
  * broad to be a boundary (home, a folder above it, the filesystem root) is
@@ -71,6 +89,7 @@ export function commandCwd(raw: string | undefined, root: string | null | undefi
     if (isAbsolute(rel) || parts[0] === '..') return ignored('it is outside the project root');
     const posix = parts.join('/');
     if (posix.length > 200) return ignored('it is nested too deep to name');
+    if (!sendableFolder(posix)) return ignored('its name has a character DebugAI cannot pass on');
     return { kind: 'used', cwd: { dir: target, rel: posix } };
   } catch {
     return ignored('it is not a folder that exists');

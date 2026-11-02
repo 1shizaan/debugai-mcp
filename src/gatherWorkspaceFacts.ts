@@ -65,7 +65,7 @@
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, resolve, extname, relative, isAbsolute, dirname, sep } from 'node:path';
 
-import type { CommandCwd } from './commandCwd.js';
+import { sendableFolder, type CommandCwd } from './commandCwd.js';
 import { buildWorkspaceFacts, manifestText, type WorkspaceFacts } from './workspaceFacts.js';
 
 /**
@@ -318,7 +318,9 @@ function holdsManifest(dir: string): boolean {
  * The folder to read the facts from when a command ran in `cwd`: the nearest at
  * or above it, up to `root`, that holds a manifest, and `root` when none does.
  * Never outside `root`. A folder inside a hidden or vendored directory is not a
- * project of its own, so a manifest in `node_modules/x` does not become one.
+ * project of its own, so a manifest in `node_modules/x` does not become one. Nor
+ * is a folder whose name the engine would not take as given (sendableFolder):
+ * the facts would be said to be the root's.
  */
 export function factsScope(root: string, cwd: string | null | undefined): string {
   if (!cwd) { return root; }
@@ -333,7 +335,7 @@ export function factsScope(root: string, cwd: string | null | undefined): string
       // it is kept on its own so the boundary does not rest on that, and a folder on
       // another Windows volume answers an absolute path.
       if (rel === '' || parts[0] === '..' || isAbsolute(rel)) { return root; }
-      if (!parts.some((seg) => seg.startsWith('.') || SKIP_DIRS.has(seg)) && holdsManifest(dir)) { return dir; }
+      if (!parts.some((seg) => seg.startsWith('.') || SKIP_DIRS.has(seg)) && sendableFolder(parts.join('/')) && holdsManifest(dir)) { return dir; }
       dir = dirname(dir);
     }
   } catch { /* an unreadable folder: the root, as before */ }

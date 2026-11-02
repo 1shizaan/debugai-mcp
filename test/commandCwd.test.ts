@@ -20,7 +20,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { __resetClientUpdate } from '../src/clientUpdate.js';
-import { MAX_CWD_CHARS, commandCwd } from '../src/commandCwd.js';
+import { MAX_CWD_CHARS, commandCwd, sendableFolder } from '../src/commandCwd.js';
 import { __resetExplicitProjectCache } from '../src/explicitProject.js';
 import { __resetWorkspaceFactsCache, factsScope, gatherWorkspaceFacts } from '../src/gatherWorkspaceFacts.js';
 import { createServer } from '../src/server.js';
@@ -185,6 +185,37 @@ describe('a relative path in the trace means the folder the command ran in', () 
     made.push(sibling);
     const trace = `File "../../${basename(sibling)}/x.py", line 1, in <module>`;
     expect(resolveSourceContext({ errorText: trace, root: top, cwd: join(top, 'backend') })).toBeNull();
+  });
+});
+
+describe('a folder is named to the engine only as the engine will read it', () => {
+  // The engine (workspace_evidence.py, _relative_folder) strips the ends and drops
+  // a backslash, a drive, a control character, an empty, `.` or `..` segment, and
+  // anything past 200 characters. A name it would change or drop must not be sent:
+  // the footer would name one folder while the engine called the facts the root's.
+  it('refuses every name the engine would change or drop, and nothing it takes as given', () => {
+    const refused = ['a\\b', 'a\tb', 'a\nb', 'a\u007fb', 'a\u0090b', 'end\u0085', 'backend ', ' backend',
+      'x'.repeat(201), 'a//b', 'a/./b', 'a/../b', '../a', '/etc', 'C:/x', '', '.'];
+    for (const name of refused) { expect(sendableFolder(name), JSON.stringify(name)).toBe(false); }
+    for (const name of ['backend', 'backend/app', 'my app/src', 'x'.repeat(200), 'ünïcode/ok', 'a.b/c-d_e']) {
+      expect(sendableFolder(name), name).toBe(true);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('a cwd whose name has a backslash or a tab is ignored, and the answer says so', () => {
+    const top = monorepo();
+    for (const name of ['back\\slash', 'tab\tname']) {
+      mkdirSync(join(top, name), { recursive: true });
+      const verdict = commandCwd(name, top);
+      expect(verdict, JSON.stringify(name)).toEqual({ kind: 'ignored', note: 'cwd ignored: its name has a character DebugAI cannot pass on' });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('a manifest folder with such a name is passed over for the folder above it', () => {
+    const top = monorepo();
+    put(top, 'svc\\odd/package.json', JSON.stringify({ dependencies: { 'odd-dep': '1.0.0' } }));
+    mkdirSync(join(top, 'svc\\odd', 'src'), { recursive: true });
+    expect(factsScope(top, join(top, 'svc\\odd', 'src'))).toBe(top);
   });
 });
 
