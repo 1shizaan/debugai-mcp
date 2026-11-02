@@ -316,6 +316,13 @@ package. Client releases are only for things that change on your machine.
 
 Recent server-side work. Each item reaches agents with no upgrade once the engine release that carries it is deployed:
 
+- **The same error sent again gets a new answer, not the cached one.** An error that names
+  no file and line kept no record of what was suggested for it, so sending it again
+  returned the cached answer and charged a debug for it. It now keeps one: a repeat gets a
+  fresh analysis that is shown the answer before it.
+- **A double send is answered once.** The same error sent again while the first is still
+  being answered, or within two seconds of its answer, gets that answer, marked cached, and
+  is not charged again.
 - **A failed request line from a browser console is answered with where its reason is.**
   `POST https://example.com/api/checkout 500 (Internal Server Error)` on its own was refused
   as no error. It is accepted now, and when it is all that was sent, the answer says the
