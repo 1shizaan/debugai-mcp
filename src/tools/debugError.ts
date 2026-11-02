@@ -7,6 +7,7 @@ import { resolveAuth } from './authGate.js';
 import { basename } from 'node:path';
 import { getProjectId, getProjectRoot, NO_ROOT_BADGE } from '../project.js';
 import { explicitProject } from '../explicitProject.js';
+import { commandCwd } from '../commandCwd.js';
 import { API_ERROR_MAX_CHARS, fitErrorText } from '../fitErrorText.js';
 import { memorySection } from '../memorySection.js';
 import { resolveSourceContext } from '../sourceContext.js';
@@ -183,13 +184,21 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             'are scoped to it (never your home directory, a folder above it or the filesystem root), and without it they are ' +
             'scoped to the folder this server started in.',
           ),
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            'Optional. The folder the failing command ran in, when it was not the project root: ' +
+            'absolute, or relative to the project root, and inside it. Relative paths in the error ' +
+            'and the dependencies DebugAI reads are taken from there.',
+          ),
       },
       annotations: {
         readOnlyHint: true,
         title: 'Debug Error',
       },
     },
-    async ({ errorText, language, codeSnippet, snippetStartLine, filePath, projectRoot, reproCommand, expected }) => {
+    async ({ errorText, language, codeSnippet, snippetStartLine, filePath, projectRoot, cwd, reproCommand, expected }) => {
       const gate = await resolveAuth(config);
       if (!gate.ok) return gate.result;
 
@@ -215,11 +224,17 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       const ownSnippet = codeSnippet?.trim() ? codeSnippet : undefined;
       const namedFile = filePath?.trim() ? filePath : undefined;
 
+      // Where inside the project the command ran, when the caller says. Believed
+      // only if it is a folder inside the root (../commandCwd.ts); otherwise it
+      // is ignored, and the answer says so in one line.
+      const where = commandCwd(cwd, root);
+      const ranIn = where.kind === 'used' ? where.cwd : null;
+
       // No root means no reads: getProjectRoot() is null when this server started in
       // the home directory or the filesystem root and nobody named a project.
       let resolved: ReturnType<typeof resolveSourceContext> = null;
       if (!ownSnippet && root) {
-        resolved = resolveSourceContext({ errorText, filePath: namedFile, root });
+        resolved = resolveSourceContext({ errorText, filePath: namedFile, root, cwd: ranIn?.dir });
       }
       const snippet = ownSnippet ?? resolved?.snippet;
       const effectiveFilePath = namedFile ?? resolved?.files[0]?.label;
@@ -233,7 +248,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
       // 24% of the wrong answers in the 2026-09-13 corpus needed exactly this.
       // Bounded and total - see ../gatherWorkspaceFacts.ts - so the worst case
       // is null and a prompt identical to today's.
-      const workspaceFacts = gatherWorkspaceFacts(root);
+      const workspaceFacts = gatherWorkspaceFacts(root, ranIn);
       const fitted = fitErrorText(errorText);
       const hint = languageHint(language);
 
@@ -315,6 +330,8 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
           // Said, not silent: an agent that sees this knows to pass projectRoot.
           badges.push(NO_ROOT_BADGE);
         }
+        if (ranIn) { badges.push(`Command ran in: ${ranIn.rel}`); }
+        if (where.kind === 'ignored') { badges.push(where.note); }
         if (result.memory_enabled === false) {
           badges.push(`Memory: off${result.memory_disabled_reason ? ` (${result.memory_disabled_reason})` : ''}`);
         }
@@ -361,6 +378,7 @@ export function registerDebugError(server: McpServer, config: BackendConfig): vo
             // agent supplied its own snippet or nothing resolved.
             local_files_read:     resolved?.files.map((f) => f.label) ?? [],
             project:              { root, source: explicit?.source ?? 'cwd' },
+            command_cwd:          ranIn?.rel ?? null,
             memory_enabled:       result.memory_enabled ?? null,
             mcp_version:          config.version,
             error_text_cut:       fitted.cut,

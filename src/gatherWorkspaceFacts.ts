@@ -44,6 +44,18 @@
  * depth- and count-bounded, and every read is size-capped. A repository is
  * untrusted input; it was cloned, not written.
  *
+ * ## Where the command ran
+ *
+ * Everything above is read from the project root. A command run in a folder
+ * below it, `backend/` of a repository that also has `frontend/`, answers to the
+ * manifests nearest that folder, and the root's are the wrong half of the
+ * project (about twenty answers in the 2026-10-30 audit export; see
+ * commandCwd.ts). So a validated `cwd` moves the folder the facts are read FROM
+ * to the nearest one at or above it, up to the root, that holds a manifest, and
+ * everything else is unchanged: the same walk, the same exact-name allowlist,
+ * the same caps, `.env` still never opened. Where no folder on the way up holds
+ * one, it is the root, as before. The folder is reported back as `command_cwd`.
+ *
  * ## Never throws
  *
  * Returns `null` rather than raising, on every path. A debug that fails because
@@ -51,8 +63,9 @@
  * than the guessing this replaces.
  */
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join, resolve, extname, relative, isAbsolute } from 'node:path';
+import { join, resolve, extname, relative, isAbsolute, dirname, sep } from 'node:path';
 
+import type { CommandCwd } from './commandCwd.js';
 import { buildWorkspaceFacts, manifestText, type WorkspaceFacts } from './workspaceFacts.js';
 
 /**
@@ -276,23 +289,94 @@ export interface GatheredFacts extends WorkspaceFacts {
    * what can be safely known. The contents are never read.
    */
   has_env_file: boolean;
+  /**
+   * Where the failing command ran, relative to the project root, `/`-separated.
+   * Absent unless the caller named a folder inside the root. The engine says so
+   * in one sentence and puts it in the cache key (workspace_evidence.py).
+   */
+  command_cwd?: string;
+  /**
+   * The folder the facts above were read from, relative to the project root,
+   * `/`-separated: the nearest folder at or above `command_cwd` that holds a
+   * manifest. Absent when they are the root's, so the engine can say where a
+   * `.env` or a virtualenv is instead of calling every folder the root.
+   */
+  facts_from?: string;
+}
+
+/** Whether `dir` holds a manifest the facts are built from: an exact name, or a .NET project file. */
+function holdsManifest(dir: string): boolean {
+  try {
+    if (MANIFEST_FILES.some((name) => statSync(join(dir, name), { throwIfNoEntry: false })?.isFile())) { return true; }
+    return readdirSync(dir).some((name) => PROJECT_EXT.has(extname(name).toLowerCase()));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The folder to read the facts from when a command ran in `cwd`: the nearest at
+ * or above it, up to `root`, that holds a manifest, and `root` when none does.
+ * Never outside `root`. A folder inside a hidden or vendored directory is not a
+ * project of its own, so a manifest in `node_modules/x` does not become one.
+ */
+export function factsScope(root: string, cwd: string | null | undefined): string {
+  if (!cwd) { return root; }
+  try {
+    const realRoot = realpathSync(root);
+    let dir = realpathSync(cwd);
+    for (let step = 0; step < 64; step += 1) {
+      const rel = relative(realRoot, dir);
+      const parts = rel.split(sep);
+      // Reached the root, or never inside it: the root's own manifests. The `..`
+      // test is also what the hidden-folder test below would say of a leading `..`;
+      // it is kept on its own so the boundary does not rest on that, and a folder on
+      // another Windows volume answers an absolute path.
+      if (rel === '' || parts[0] === '..' || isAbsolute(rel)) { return root; }
+      if (!parts.some((seg) => seg.startsWith('.') || SKIP_DIRS.has(seg)) && holdsManifest(dir)) { return dir; }
+      dir = dirname(dir);
+    }
+  } catch { /* an unreadable folder: the root, as before */ }
+  return root;
+}
+
+/** `scope` relative to `root`, `/`-separated, or '' when it is the root or cannot be named from it. */
+function scopeFrom(root: string, scope: string): string {
+  if (scope === root) { return ''; }
+  try {
+    const rel = relative(realpathSync(root), scope);
+    const parts = rel.split(sep);
+    if (rel === '' || isAbsolute(rel) || parts[0] === '..') { return ''; }
+    return parts.join('/');
+  } catch {
+    return '';
+  }
+}
+
+function tagged(facts: GatheredFacts | null, cwd: CommandCwd | null | undefined, from: string): GatheredFacts | null {
+  if (!facts || !cwd) { return facts; }
+  return from ? { ...facts, command_cwd: cwd.rel, facts_from: from } : { ...facts, command_cwd: cwd.rel };
 }
 
 /**
  * Gather what this repository declares. Returns null when there is nothing
- * worth sending, when the root is unusable, or on any failure at all.
+ * worth sending, when the root is unusable, or on any failure at all. With
+ * `cwd`, the folder a command ran in (see commandCwd.ts), the facts are read
+ * from the nearest manifest folder at or above it instead of from the root.
  */
-export function gatherWorkspaceFacts(root: string | null | undefined): GatheredFacts | null {
+export function gatherWorkspaceFacts(root: string | null | undefined, cwd?: CommandCwd | null): GatheredFacts | null {
   try {
     if (!root || typeof root !== 'string') { return null; }
-    const abs = resolve(root);
+    const scope = cwd ? factsScope(root, cwd.dir) : root;
+    const abs = resolve(scope);
+    const from = cwd ? scopeFrom(root, scope) : '';
 
     // Keyed by root, not merely time: a single agent process can be pointed at
     // more than one repository, and serving one project's manifests for another
     // would be worse than sending nothing at all.
     const now = Date.now();
     if (cached && cached.root === abs && (now - cached.at) < CACHE_TTL_MS) {
-      return cached.facts;
+      return tagged(cached.facts, cwd, from);
     }
     try {
       if (!statSync(abs).isDirectory()) { return null; }
@@ -396,7 +480,7 @@ export function gatherWorkspaceFacts(root: string | null | undefined): GatheredF
 
     const out: GatheredFacts = { ...facts, has_env_file: walked.hasEnvFile };
     cached = { root: abs, at: now, facts: out };
-    return out;
+    return tagged(out, cwd, from);
   } catch {
     return null;
   }
