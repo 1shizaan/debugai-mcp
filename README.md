@@ -314,6 +314,27 @@ package. Client releases are only for things that change on your machine.
 
 Recent server-side work. Each item reaches agents with no upgrade once the engine release that carries it is deployed:
 
+- **A failed request line from a browser console is answered with where its reason is.**
+  `POST https://example.com/api/checkout 500 (Internal Server Error)` on its own was refused
+  as no error. It is accepted now, and when it is all that was sent, the answer says the
+  reason is on the server: the response in the Network tab, or the server's log. Like a
+  refusal, that answer is not counted against the limit.
+- **A `python -c` one-liner that did not parse gets a short answer with no model call.**
+  `File "<string>", line 1` with a SyntaxError means the code string never ran, often
+  because the shell rewrote its quotes. The answer says so and ranks the moves that settle
+  it: save the code to a file, pipe it in as a literal block, or give each statement its
+  own line. It counts as a debug, like every answer from the pattern library.
+- **A constructor called another way is an unverified claim too.** A fix that calls a
+  constructor with an argument list the request never showed (C# CS1729) is capped like
+  any other claim about an API the engine cannot see, and when that cap fires, the
+  answer's label is lowered with the number instead of staying high.
+- **An answer DebugAI could not read is never counted as a fix.** A report on it is stored
+  with no verdict and never promoted into project memory, and it is not written down as
+  something DebugAI suggested.
+- **DebugAI's own messages and its own setup command are answered as what they are.** A
+  line starting "DebugAI:" is not analysed as an error, and a setup command pasted into
+  the debug box gets back `npx -y @debugai/mcp setup` (`npx.cmd` where PowerShell blocks
+  scripts), with no change to a security setting.
 - **A failure reported by an agent is no longer refused as "not an error"** because
   its wording was not on the engine's list of error phrases. `No module named`,
   Ubuntu's `Command 'x' not found`, a browser's `net::ERR_*`, and compilers that
