@@ -353,7 +353,9 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
 
-**Unreleased**
+**2.8.0** - Agents use DebugAI on their own: `setup` offers the rule and the Claude Code
+hook, and `try` builds a first bug to debug. A file named with no line is read around
+what the error names, and an answer DebugAI could not read is a failure, not a fix.
 
 - **`setup` offers the rule and the Claude Code hook.** The docs told you to paste a rule into `CLAUDE.md` and a hook into `~/.claude/settings.json`, and said no command did either, so an agent that could call DebugAI was still left to decide when. After the clients are configured, `setup` now asks to add both: the rule to the end of the file each of your agents reads in the current project, and the hook into `~/.claude/settings.json`, merged in and backed up first. Enter alone is yes. `--rules`, `--no-rules`, `--hook` and `--no-hook` answer without asking, and with no terminal and no flag it adds neither and prints the command that would. A second run adds nothing, a settings file that does not parse is left alone, and your home folder is never a project.
 - **The file is the one each agent reads, checked against its docs.** A new `CLAUDE.md` stops Claude Code reading an `AGENTS.md`, and Zed reads only the first file on its list, so `setup` will not start a file that hides the one an agent reads now. It names that file for you instead.
@@ -366,6 +368,11 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
   then solved the error another way. It now comes back as an error: DebugAI could not read
   its own analysis, the attempt was not counted, one more try is worth it, and there is no
   `debugLogId`.
+- **A file named with no line is read around what the error names.** When an agent
+  named a file and the error gave no line in it, the server sent lines 1 to 81 whatever
+  the error said; about 18 answers said only the top of the file was visible. It now
+  centres on the test a pytest node id names, a line the error states, or where a name
+  the error quotes is defined, and sends the top only when none of those is there.
 
 **2.7.0** - Built from a second agent's field report, this time from a greenfield
 project on libraries newer than any model's training data (report of 2026-09-20).
