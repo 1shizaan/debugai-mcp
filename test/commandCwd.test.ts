@@ -195,6 +195,8 @@ describe('the facts come from the nearest manifests between the folder and the r
     expect(facts?.manifests).toEqual(['requirements.txt']);
     expect(facts?.declared_deps).toEqual(['flask']);
     expect(facts?.command_cwd).toBe('backend/app');
+    // And it says which folder they came from, so a venv or .env there is not called the root's.
+    expect(facts?.facts_from).toBe('backend');
     // The module list is the one for where the command ran: `utils` is importable from backend.
     expect(facts?.local_modules).toContain('utils');
   });
@@ -211,6 +213,7 @@ describe('the facts come from the nearest manifests between the folder and the r
     const facts = gatherWorkspaceFacts(top);
     expect(facts?.declared_deps).toContain('root-dep');
     expect(facts).not.toHaveProperty('command_cwd');
+    expect(facts).not.toHaveProperty('facts_from');
   });
 
   it('where nothing on the way up holds a manifest, it is the root', () => {
@@ -218,6 +221,8 @@ describe('the facts come from the nearest manifests between the folder and the r
     const facts = gatherWorkspaceFacts(top, { dir: join(top, 'tools'), rel: 'tools' });
     expect(facts?.declared_deps).toContain('root-dep');
     expect(facts?.command_cwd).toBe('tools');
+    // The root's facts carry no facts_from: the engine then says "at the project root", which is true.
+    expect(facts).not.toHaveProperty('facts_from');
     expect(factsScope(top, join(top, 'tools'))).toBe(top);
   });
 
@@ -269,8 +274,11 @@ describe('the facts come from the nearest manifests between the folder and the r
     const b = gatherWorkspaceFacts(top, { dir: join(top, 'backend', 'app'), rel: 'backend/app' });
     const c = gatherWorkspaceFacts(top, null);
     expect([a?.command_cwd, b?.command_cwd]).toEqual(['backend', 'backend/app']);
+    // One scope, read once and cached: both are told it, and the cached copy is not mutated.
+    expect([a?.facts_from, b?.facts_from]).toEqual(['backend', 'backend']);
     expect(a?.declared_deps).toEqual(b?.declared_deps);
     expect(c).not.toHaveProperty('command_cwd');
+    expect(c).not.toHaveProperty('facts_from');
     expect(c?.declared_deps).toContain('root-dep');
   });
 });

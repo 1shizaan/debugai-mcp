@@ -295,6 +295,13 @@ export interface GatheredFacts extends WorkspaceFacts {
    * in one sentence and puts it in the cache key (workspace_evidence.py).
    */
   command_cwd?: string;
+  /**
+   * The folder the facts above were read from, relative to the project root,
+   * `/`-separated: the nearest folder at or above `command_cwd` that holds a
+   * manifest. Absent when they are the root's, so the engine can say where a
+   * `.env` or a virtualenv is instead of calling every folder the root.
+   */
+  facts_from?: string;
 }
 
 /** Whether `dir` holds a manifest the facts are built from: an exact name, or a .NET project file. */
@@ -333,8 +340,22 @@ export function factsScope(root: string, cwd: string | null | undefined): string
   return root;
 }
 
-function tagged(facts: GatheredFacts | null, cwd: CommandCwd | null | undefined): GatheredFacts | null {
-  return facts && cwd ? { ...facts, command_cwd: cwd.rel } : facts;
+/** `scope` relative to `root`, `/`-separated, or '' when it is the root or cannot be named from it. */
+function scopeFrom(root: string, scope: string): string {
+  if (scope === root) { return ''; }
+  try {
+    const rel = relative(realpathSync(root), scope);
+    const parts = rel.split(sep);
+    if (rel === '' || isAbsolute(rel) || parts[0] === '..') { return ''; }
+    return parts.join('/');
+  } catch {
+    return '';
+  }
+}
+
+function tagged(facts: GatheredFacts | null, cwd: CommandCwd | null | undefined, from: string): GatheredFacts | null {
+  if (!facts || !cwd) { return facts; }
+  return from ? { ...facts, command_cwd: cwd.rel, facts_from: from } : { ...facts, command_cwd: cwd.rel };
 }
 
 /**
@@ -346,14 +367,16 @@ function tagged(facts: GatheredFacts | null, cwd: CommandCwd | null | undefined)
 export function gatherWorkspaceFacts(root: string | null | undefined, cwd?: CommandCwd | null): GatheredFacts | null {
   try {
     if (!root || typeof root !== 'string') { return null; }
-    const abs = resolve(cwd ? factsScope(root, cwd.dir) : root);
+    const scope = cwd ? factsScope(root, cwd.dir) : root;
+    const abs = resolve(scope);
+    const from = cwd ? scopeFrom(root, scope) : '';
 
     // Keyed by root, not merely time: a single agent process can be pointed at
     // more than one repository, and serving one project's manifests for another
     // would be worse than sending nothing at all.
     const now = Date.now();
     if (cached && cached.root === abs && (now - cached.at) < CACHE_TTL_MS) {
-      return tagged(cached.facts, cwd);
+      return tagged(cached.facts, cwd, from);
     }
     try {
       if (!statSync(abs).isDirectory()) { return null; }
@@ -457,7 +480,7 @@ export function gatherWorkspaceFacts(root: string | null | undefined, cwd?: Comm
 
     const out: GatheredFacts = { ...facts, has_env_file: walked.hasEnvFile };
     cached = { root: abs, at: now, facts: out };
-    return tagged(out, cwd);
+    return tagged(out, cwd, from);
   } catch {
     return null;
   }
