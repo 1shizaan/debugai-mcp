@@ -295,7 +295,7 @@ Then run `npx -y @debugai/mcp login` once to store your key. If you would rather
 - Simple errors route to a fast model. Ugly cross-file ones route to a stronger one on paid tiers. The `Model:` badge in each response tells you which one answered.
 - Analyses run on DebugAI's servers. The error text, any snippet you pass, (since 2.2) the project source files the stack trace names, and (since 2.5) the project facts described below are sent there, and Claude (Anthropic) does the analysis, or OpenAI's GPT-4o-mini when Claude is unavailable. The error text is also embedded by Voyage AI to search your project's index. The response lists every file that was read. Scope and limits are spelled out under [`debug_error`](#it-reads-the-source-the-trace-names-22). Privacy policy: [debugai.io/privacy](https://debugai.io/privacy?src=npm).
 - Errors are remembered per project so a repeat hit starts from a fix that was already confirmed. The project identity is a hash of your repo root path. The project id carries no path, but an absolute `filePath` is sent as written, as is any path in the error text.
-- Every `debug_error` call that has a project root also reads what the project declares and sends it: `package.json`, `requirements.txt`, `pyproject.toml` and any `.csproj`, `.fsproj` or `.vbproj` (found by walking down from the project root, to a bounded depth and count). What is sent is the dependency names and the versions as the manifests spell them, which kinds of manifest were found (such as `package.json` or `*.csproj`, not where they are), the names of Python modules in the project, the names of any virtual-environment folders, and whether a `node_modules` folder and a `.env` file exist. The contents of `.env` are never opened. This happens even when you pass `codeSnippet`. It lets the engine tell a package that is declared from one that is not.
+- Every `debug_error` call that has a project root also reads what the project declares and sends it: `package.json`, `requirements.txt`, `pyproject.toml` and any `.csproj`, `.fsproj` or `.vbproj` (found by walking down from the project root, to a bounded depth and count). What is sent is the dependency names and the versions as the manifests spell them, which kinds of manifest were found (such as `package.json` or `*.csproj`, not where they are), the names of Python modules in the project, the names of any virtual-environment folders, and whether a `node_modules` folder and a `.env` file exist. The contents of `.env` are never opened. This happens even when you pass `codeSnippet`. It lets the engine tell a package that is declared from one that is not. When you pass a `cwd` inside the project (since 2.9), the facts are read from the nearest folder at or above it that holds a manifest, and that folder and `cwd` are sent too, both relative to the project root.
 - The one fact it does not send is which Python interpreter is selected. The VS Code extension can read that from the editor, which is what lets it tell "not installed" apart from "installed under a different interpreter". This server has no equivalent, so on a missing-module error you get the general answer and the check to run, not a verdict. You have a shell and it does not, so the honest division is that you run the check.
 
 ## Troubleshooting
@@ -383,18 +383,11 @@ Recent server-side work. Each item reaches agents with no upgrade once the engin
 - pytest, unittest, jest, vitest and mocha output yields real file paths, so a
   failing test gets cross-file context instead of none.
 
-**Unreleased**
-
-- **A wrong root cause has its own verdict.** `report_outcome` takes `diagnosis_wrong`: you read
-  the answer and its root cause is not the cause, with the real one in `actualFix`. Until now that
-  was reported as `unused`, which says nothing about whether the answer was right, so none of it
-  could be counted. It counts as a wrong answer, marks no fix as tried and changes nothing in
-  memory.
-- **`debug_error` takes the folder the command ran in.** About twenty answers in one audit went wrong because the failing command ran in a different folder than `projectRoot`: a local module answered with `pip install`, a venv that existed in the subfolder reported missing, a build run from the parent folder, the same wrong root folder twice. An agent can now pass `cwd`, absolute or relative to the project root. A relative path in the error is looked for there first, the dependencies are read from the nearest `package.json`, `requirements.txt`, `pyproject.toml` or .NET project file between that folder and the project root, and the engine is told where the command ran. It has to be a folder inside the project, after symlinks resolve; anything else is ignored and the footer says `cwd ignored` and why. Nothing else it reads changes, and a `.env` is still never opened. The bundled server in the VS Code extension takes it too.
-
-**2.8.0** - Agents use DebugAI on their own: `setup` offers the rule and the Claude Code
+**2.9.0** - Agents use DebugAI on their own: `setup` offers the rule and the Claude Code
 hook, and `try` builds a first bug to debug. A file named with no line is read around
 what the error names, and an answer DebugAI could not read is a failure, not a fix.
+`report_outcome` takes `diagnosis_wrong` for a root cause that was not the cause, and
+`debug_error` takes the folder the command ran in.
 
 - **`setup` offers the rule and the Claude Code hook.** The docs told you to paste a rule into `CLAUDE.md` and a hook into `~/.claude/settings.json`, and said no command did either, so an agent that could call DebugAI was still left to decide when. After the clients are configured, `setup` now asks to add both: the rule to the end of the file each of your agents reads in the current project, and the hook into `~/.claude/settings.json`, merged in and backed up first. Enter alone is yes. `--rules`, `--no-rules`, `--hook` and `--no-hook` answer without asking, and with no terminal and no flag it adds neither and prints the command that would. A second run adds nothing, a settings file that does not parse is left alone, and your home folder is never a project.
 - **The file is the one each agent reads, checked against its docs.** A new `CLAUDE.md` stops Claude Code reading an `AGENTS.md`, and Zed reads only the first file on its list, so `setup` will not start a file that hides the one an agent reads now. It names that file for you instead.
@@ -412,6 +405,12 @@ what the error names, and an answer DebugAI could not read is a failure, not a f
   the error said; about 18 answers said only the top of the file was visible. It now
   centres on the test a pytest node id names, a line the error states, or where a name
   the error quotes is defined, and sends the top only when none of those is there.
+- **A wrong root cause has its own verdict.** `report_outcome` takes `diagnosis_wrong`: you read
+  the answer and its root cause is not the cause, with the real one in `actualFix`. Until now that
+  was reported as `unused`, which says nothing about whether the answer was right, so none of it
+  could be counted. It counts as a wrong answer, marks no fix as tried and changes nothing in
+  memory.
+- **`debug_error` takes the folder the command ran in.** About twenty answers in one audit went wrong because the failing command ran in a different folder than `projectRoot`: a local module answered with `pip install`, a venv that existed in the subfolder reported missing, a build run from the parent folder, the same wrong root folder twice. An agent can now pass `cwd`, absolute or relative to the project root. A relative path in the error is looked for there first, the dependencies are read from the nearest `package.json`, `requirements.txt`, `pyproject.toml` or .NET project file between that folder and the project root, and the engine is told where the command ran. It has to be a folder inside the project, after symlinks resolve; anything else is ignored and the footer says `cwd ignored` and why. Nothing else it reads changes, and a `.env` is still never opened. The bundled server in the VS Code extension takes it too.
 
 **2.7.0** - Built from a second agent's field report, this time from a greenfield
 project on libraries newer than any model's training data (report of 2026-09-20).
